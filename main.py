@@ -1,121 +1,143 @@
-import os
 import re
-import datetime
 import requests
 from bs4 import BeautifulSoup
-import libsql_experimental as libsql
 
-# کلیدهای دیتابیس و نگاشت نام‌های فارسی به symbol_key
-ASSET_MAP = {
-    # ارزهای دیجیتال
-    "بیت‌کوین": "btc", "اتریوم": "eth", "لایت‌کوین": "ltc", "بیت‌کوین کش": "bch",
-    "تتر": "usdt", "ترون": "trx", "بایننس کوین": "bnb", "استلار": "xlm",
-    "ریپل": "xrp", "دوج کوین": "doge", "دش": "dash", "کاردانو": "ada",
-    "پولکادات": "dot", "سولانا": "sol", "آوالانچ": "avax", "شیبا اینو": "shib", "تون‌کوین": "ton",
+def to_english_digits(text: str) -> str:
+    text = text.replace('−', '-').replace('–', '-')
+    persian_digits = "۰۱۲۳۴۵۶۷۸۹"
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+    english_digits = "0123456789"
+    translation = str.maketrans(persian_digits + arabic_digits, english_digits * 2)
+    return text.translate(translation)
 
-    # نفت، انرژی و کالاهای اساسی
-    "نفت سبک": "oil_crude", "نفت برنت": "oil_brent", "نفت اوپک": "oil_opec",
-    "بنزین (RBOB)": "gasoline", "گاز طبیعی": "natural_gas", "زغال سنگ": "coal",
-    "آلومینیوم": "aluminum", "نیکل": "nickel", "سرب": "lead", "روی": "zinc",
-    "مس": "copper", "قلع": "tin", "پنبه": "cotton", "شکر": "sugar",
-    "سویا": "soybeans", "گندم": "wheat", "ذرت": "corn", "برنج": "rice",
-
-    # ارزها
-    "دلار": "usd", "یورو": "eur", "درهم امارات": "aed", "پوند انگلیس": "gbp",
-    "لیر ترکیه": "try", "فرانک سوئیس": "chf", "یوان چین": "cny", "ین ژاپن": "jpy",
-    "وون کره جنوبی": "krw", "دلار کانادا": "cad", "دلار استرالیا": "aud", "کرون دانمارک": "dkk",
-    "کرون سوئد": "sek", "کرون نروژ": "nok", "ریال عربستان": "sar", "ریال قطر": "qar",
-    "ریال عمان": "omr", "دینار کویت": "kwd", "دینار بحرین": "bhd", "رینگیت مالزی": "myr",
-    "بات تایلند": "thb", "دلار هنگ کنگ": "hkd", "روبل روسیه": "rub", "منات آذربایجان": "azn",
-    "درام ارمنستان": "amd", "لاری گرجستان": "gel", "سوم قرقیزستان": "kgs", "سامانی تاجیکستان": "tjs",
-    "منات ترکمنستان": "tmt", "دلار نیوزیلند": "nzd", "دلار سنگاپور": "sgd", "روپیه هند": "inr",
-    "روپیه پاکستان": "pkr", "دینار عراق": "iqd", "لیر سوریه": "syp", "افغانی": "afn",
-
-    # بورس و شاخص‌های جهانی
-    "شاخص کل": "bourse_total", "شاخص کل هم وزن": "bourse_equal_weight", "شاخص فرابورس": "ifb_total",
-    "بازار اول فرابورس": "ifb_market1", "بازار دوم فرابورس": "ifb_market2", "شاخص بازار اول": "bourse_market1",
-    "شاخص بازار دوم": "bourse_market2", "شاخص 30 شرکت بزرگ": "top_30_companies", "شاخص 50 شرکت فعالتر": "active_50_companies",
-    "شاخص قیمت 50 شرکت": "price_50_companies", "شاخص قیمت هم وزن": "price_equal_weight", "شاخص قیمت وزنی ارزشی": "price_weighted",
-    "داوجونز": "dow_jones", "اس اند پی 500": "sp_500", "نزدک": "nasdaq", "اس ام آی سوئیس": "smi_swiss",
-    "نیفتی 50": "nifty_50", "فتسی بریتانیا": "ftse_100", "دکس آلمان": "dax", "کک فرانسه": "cac_40",
-    "نیکی ژاپن": "nikkei_225", "شانگهای چین": "shanghai_composite", "آیبکس اسپانیا": "ibex_35", "اس اند پی کانادا": "sp_tsx",
-
-    # طلا، سکه و صندوق‌های طلا
-    "سکه امامی": "coin_emami", "سکه بهار آزادی": "coin_azadi", "نیم سکه": "coin_half",
-    "ربع سکه": "coin_quarter", "سکه گرمی": "coin_gram", "حباب سکه امامی": "bubble_emami",
-    "حباب سکه بهار آزادی": "bubble_azadi", "حباب نیم سکه": "bubble_half", "حباب ربع سکه": "bubble_quarter",
-    "حباب سکه گرمی": "bubble_gram", "صندوق طلای کهربا": "fund_kahreba", "صندوق طلای زروان": "fund_zarvan",
-    "صندوق طلای ریتون": "fund_riton", "صندوق طلای ناب": "fund_nab", "صندوق طلای تابش": "fund_tabesh",
-    "صندوق طلای عیار": "fund_ayar", "صندوق طلای لوتوس": "fund_lotus", "صندوق طلای مثقال": "fund_mesghal",
-    "صندوق طلای گوهر": "fund_gohar", "انس طلا": "gold_ounce", "انس نقره": "silver_ounce",
-    "انس پلاتین": "platinum_ounce", "انس پالادیوم": "palladium_ounce", "طلای 18 عیار": "gold_18k",
-    "طلای 24 عیار": "gold_24k", "طلای دست دوم": "gold_used", "گرم نقره 999": "silver_gram_999",
-    "مثقال طلا": "gold_mesghal", "آبشده نقدی": "abshedeh_cash", "آبشده معاملاتی": "abshedeh_trade", "مثقال بدون حباب": "mesghal_nobubble"
-}
-
-def fetch_tgju_data():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    url = "https://www.tgju.org/"
-    response = requests.get(url, headers=headers, timeout=15)
-    response.raise_for_status()
+def parse_percentage(cell_tag) -> float:
+    """استخراج دقیق درصد تغییرات بر اساس کلاس‌های رنگی (قرمز/سبز)، پرانتز و علائم منفی"""
+    if cell_tag is None:
+        return 0.0
     
-    soup = BeautifulSoup(response.text, 'html.parser')
-    extracted_data = {}
+    is_negative = False
+    text = ""
 
-    # جستجو در تمامی سطرها و جدول‌های صفحه اصلی TGJU
-    for row in soup.find_all('tr'):
-        text = row.get_text(separator=' ', strip=True)
-        for title_fa, symbol_key in ASSET_MAP.items():
-            if title_fa in text and symbol_key not in extracted_data:
-                cols = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
-                if len(cols) >= 2:
-                    price = cols[1] if len(cols) > 1 else ""
-                    change_amount = cols[2] if len(cols) > 2 else ""
-                    change_percent = cols[3] if len(cols) > 3 else ""
-                    
-                    extracted_data[symbol_key] = {
-                        "title_fa": title_fa,
-                        "price": price,
-                        "change_amount": change_amount,
-                        "change_percent": change_percent
-                    }
-
-    return extracted_data
-
-def update_turso_db(data):
-    turso_url = os.environ.get("TURSO_DATABASE_URL")
-    turso_token = os.environ.get("TURSO_AUTH_TOKEN")
-
-    if not turso_url or not turso_token:
-        raise ValueError("دسترسی به متغیرهای TURSO_DATABASE_URL یا TURSO_AUTH_TOKEN یافت نشد.")
-
-    conn = libsql.connect(turso_url, auth_token=turso_token)
-    cursor = conn.cursor()
-
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    for symbol_key, item in data.items():
-        cursor.execute("""
-            INSERT OR REPLACE INTO market_prices (symbol_key, title_fa, price, change_amount, change_percent, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            symbol_key,
-            item["title_fa"],
-            item["price"],
-            item["change_amount"],
-            item["change_percent"],
-            now_str
-        ))
-
-    conn.commit()
-    conn.close()
-    print(f"تعداد {len(data)} دارایی با موفقیت در دیتابیس Turso بروزرسانی شدند.")
-
-if __name__ == "__main__":
-    market_data = fetch_tgju_data()
-    if market_data:
-        update_turso_db(market_data)
+    if isinstance(cell_tag, str):
+        text = cell_tag
     else:
-        print("هیچ داده‌ای یافت نشد.")
+        text = cell_tag.get_text(strip=True)
+        classes = []
+        if cell_tag.get("class"):
+            classes.extend(cell_tag.get("class"))
+        for child in cell_tag.find_all(True):
+            if child.get("class"):
+                classes.extend(child.get("class"))
+        if cell_tag.parent and cell_tag.parent.get("class"):
+            classes.extend(cell_tag.parent.get("class"))
+
+        class_str = " ".join([str(c) for c in classes]).lower()
+        style_str = str(cell_tag.get("style", "")).lower()
+        
+        # تشخیص رنگ قرمز / افت قیمت از روی کلاس‌های HTML و استایل
+        negative_keywords = ["low", "drop", "red", "danger", "down", "minus", "decrease"]
+        if any(kw in class_str for kw in negative_keywords) or "color: red" in style_str or "color:#f" in style_str or "color: #f" in style_str:
+            is_negative = True
+
+    if "-" in text or "−" in text or "🔻" in text:
+        is_negative = True
+
+    clean_text = to_english_digits(text)
+    
+    # جستجوی درصد
+    pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', clean_text)
+    if not pct_matches:
+        pct_matches = re.findall(r'%\s*(\d+(?:\.\d+)?)', clean_text)
+    
+    if pct_matches:
+        val = float(pct_matches[0])
+        if val < 500:
+            return -val if is_negative else val
+
+    # استخراج عدد داخل پرانتز
+    paren_match = re.search(r'\((.*?)\)', clean_text)
+    if paren_match:
+        inside = paren_match.group(1)
+        num_match = re.search(r'(\d+(?:\.\d+)?)', inside)
+        if num_match:
+            val = float(num_match.group(1))
+            if val < 500:
+                return -val if is_negative else val
+
+    num_match = re.search(r'[-+]?(\d+(?:\.\d+)?)', clean_text)
+    if num_match:
+        val = float(num_match.group(1))
+        if val < 500:
+            return -val if is_negative else val
+
+    return 0.0
+
+def scrape_daily_homepage_changes():
+    print("در حال رصد تغییرات روزانه بازار از صفحه اصلی tgju.org...", flush=True)
+    daily_results = {}
+    sorted_targets = sorted(DAILY_TARGET_ASSETS, key=len, reverse=True)
+
+    try:
+        res = requests.get("https://www.tgju.org", headers=HEADERS, timeout=15)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            
+            for table in soup.find_all("table"):
+                table_text = table.get_text()
+                table_container_text = table.parent.get_text() if table.parent else ""
+                
+                # ۱. نادیده گرفتن جدول «سکه / تک فروشی»
+                if "تک فروشی" in table_text or "تک‌فروشی" in table_text or "تک فروشی" in table_container_text:
+                    continue
+                
+                # ۲. نادیده گرفتن ویجت ماشین‌حساب سکه
+                if "هزینه ضرب" in table_text or "قیمت دلار (ریال)" in table_text:
+                    continue
+
+                change_col_idx = -1
+                header_tr = table.find("tr")
+                if header_tr:
+                    cols = header_tr.find_all(["th", "td"])
+                    for idx, col in enumerate(cols):
+                        col_title = col.get_text()
+                        if "تغییر" in col_title or "درصد" in col_title:
+                            change_col_idx = idx
+                            break
+                
+                for row in table.find_all("tr"):
+                    cols = row.find_all(["td", "th"])
+                    if not cols:
+                        continue
+                    
+                    row_title = cols[0].get_text(strip=True)
+                    row_full_text = row.get_text()
+                    
+                    # نادیده گرفتن سطر‌های حباب یا محاسباتی
+                    if "حباب" in row_title or "حباب" in row_full_text or "هزینه ضرب" in row_full_text:
+                        continue
+                    
+                    matched_asset = None
+                    for target in sorted_targets:
+                        if target in row_title or target in row_full_text:
+                            matched_asset = target
+                            break
+                    
+                    if matched_asset and matched_asset not in daily_results:
+                        target_cell = None
+                        
+                        if change_col_idx != -1 and len(cols) > change_col_idx:
+                            target_cell = cols[change_col_idx]
+                        else:
+                            for cell in cols[1:]:
+                                cell_txt = cell.get_text()
+                                if "(" in cell_txt and "%" in cell_txt:
+                                    target_cell = cell
+                                    break
+                        
+                        if target_cell:
+                            pct_val = parse_percentage(target_cell)
+                            daily_results[matched_asset] = pct_val
+    except Exception as e:
+        print(f"خطا در دریافت اطلاعات صفحه اصلی: {e}", flush=True)
+        
+    return daily_results
