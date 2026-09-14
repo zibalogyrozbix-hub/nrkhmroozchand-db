@@ -148,7 +148,6 @@ SYMBOL_MAP = {
     "اس‌اندپی کانادا": ["tsx_canada"]
 }
 
-# گروه‌بندی جهت اعمال قوانین استخراج
 COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum", "nickel", "lead", "zinc", "copper", "tin", "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"}
 INDICES = {"bourse_total", "bourse_equal", "fara_total", "ifb_market1", "fara_m1", "ifb_market2", "fara_m2", "bourse_market1", "bourse_m1", "bourse_market2", "bourse_m2", "bourse_30", "bourse_50", "bourse_p50", "bourse_pequal", "bourse_pweighted", "dow_jones", "sp500", "nasdaq", "smi_swiss", "nifty_50", "nifty50", "ftse_100", "ftse100", "dax", "cac_40", "nikkei_225", "nikkei225", "shanghai_composite", "shanghai", "ibex_35", "ibex35", "tsx_canada"}
 CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
@@ -176,7 +175,7 @@ def format_number_with_comma(val: float) -> str:
 
 def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float]:
     """استخراج عدد قیمت و تبدیل کلمات میلیون/هزار به عدد کامل با فرمت ۳ رقمی"""
-    if not raw_text or raw_text == "-":
+    if not raw_text or raw_text.strip() == "-" or raw_text.strip() == "":
         return "-", 0.0
     
     clean_text = to_english_digits(raw_text)
@@ -224,7 +223,6 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
     clean_text = to_english_digits(raw_text)
     is_red = is_cell_red(change_cell)
 
-    # استخراج درصد داخل پرانتز
     pct_match = re.search(r'\(([^)]+)\)', clean_text)
     pct_val = None
     if pct_match:
@@ -232,18 +230,15 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
         if pct_num_match:
             pct_val = float(pct_num_match.group(1))
 
-    # استخراج مبلغ تغییر (عدد بدون پرانتز)
     text_no_parentheses = re.sub(r'\([^)]*\)', '', clean_text)
     amt_match = re.search(r'(\d+(?:\.\d+)?)', text_no_parentheses)
     amt_val = float(amt_match.group(1)) if amt_match else 0.0
 
-    # محاسبه خودکار درصد در صورت عدم وجود در سورس
     if pct_val is None and price_val > 0 and amt_val > 0:
         pct_val = (amt_val / price_val) * 100
 
     pct_val = pct_val or 0.0
 
-    # اعمال علامت بر اساس رنگ
     if is_red:
         amt_str = f"-{format_number_with_comma(amt_val)}" if amt_val != 0 else "0"
         pct_str = f"-{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
@@ -268,10 +263,15 @@ def scrape_homepage_data():
             for table in soup.find_all("table"):
                 price_col_idx, change_col_idx = 1, 2
                 header_tr = table.find("tr")
+                
+                # پیدا کردن دقیق ایندکس ستون "ارزش" یا "قیمت" در هدر جدول
                 if header_tr:
-                    cols = [c.get_text() for c in header_tr.find_all(["th", "td"])]
-                    for idx, c_txt in enumerate(cols):
-                        if any(k in c_txt for k in ["قیمت", "قیمت زنده", "ارزش", "قیمت (ریال)"]):
+                    cols = header_tr.find_all(["th", "td"])
+                    for idx, c in enumerate(cols):
+                        c_txt = c.get_text(strip=True)
+                        if "ارزش" in c_txt:
+                            price_col_idx = idx
+                        elif any(k in c_txt for k in ["قیمت", "قیمت زنده", "قیمت (ریال)"]) and price_col_idx == 1:
                             price_col_idx = idx
                         elif "تغییر" in c_txt:
                             change_col_idx = idx
@@ -290,10 +290,9 @@ def scrape_homepage_data():
                         symbol_keys = SYMBOL_MAP[matched_fa]
                         primary_key = symbol_keys[0]
 
-                        # استخراج ستون مربوطه طبق قوانین اعلام شده
                         price_cell = cols[price_col_idx] if len(cols) > price_col_idx else cols[1]
                         
-                        # ۱. رمزارزها: انتخاب ستون قیمت ریالی (ستون اول قیمت)
+                        # ۱. رمزارزها: انتخاب ستون قیمت ریالی
                         if primary_key in CRYPTO and len(cols) >= 3:
                             price_cell = cols[1]
 
@@ -304,12 +303,21 @@ def scrape_homepage_data():
                                     price_cell = c
                                     break
 
-                        # ۳. شاخص‌ها: انتخاب ستون ارزش
+                        # ۳. شاخص‌ها: استخراج حتمی از ستون "ارزش"
                         elif primary_key in INDICES:
+                            found_val = False
                             for idx, c in enumerate(cols):
-                                if "ارزش" in c.get_text():
-                                    price_cell = cols[idx]
-                                    break
+                                c_text = c.get_text(strip=True)
+                                if c_text and c_text != "-" and any(char.isdigit() for char in c_text):
+                                    # بررسی هدر متناظر برای اطمینان از ستون ارزش یا قیمت اصلی
+                                    header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+                                    h_text = header_cells[idx].get_text(strip=True) if idx < len(header_cells) else ""
+                                    if "ارزش" in h_text or "قیمت" in h_text or idx == price_col_idx:
+                                        price_cell = c
+                                        found_val = True
+                                        break
+                            if not found_val and len(cols) > price_col_idx:
+                                price_cell = cols[price_col_idx]
 
                         price_str, price_num = parse_price_value(price_cell.get_text(strip=True), is_index=(primary_key in INDICES))
                         
