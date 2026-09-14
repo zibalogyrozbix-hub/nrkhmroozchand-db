@@ -43,7 +43,7 @@ TARGET_ITEMS = [
     {"key": "etf_lotus", "title": "صندوق طلای لوتوس", "slugs": ["etf_lotus", "lotus"], "type": "etf"},
     {"key": "etf_mesghal", "title": "صندوق طلای مثقال", "slugs": ["etf_mesghal"], "type": "etf"},
     {"key": "etf_gohar", "title": "صندوق طلای گوهر", "slugs": ["etf_gohar", "gohar"], "type": "etf"},
-    
+
     # ۲. ارزها (۳۶ مورد)
     {"key": "usd", "title": "دلار", "slugs": ["price_dollar_rl", "usd"], "type": "currency"},
     {"key": "eur", "title": "یورو", "slugs": ["price_eur", "eur"], "type": "currency"},
@@ -81,7 +81,7 @@ TARGET_ITEMS = [
     {"key": "iqd", "title": "دینار عراق", "slugs": ["price_iqd", "iqd"], "type": "currency"},
     {"key": "syp", "title": "لیر سوریه", "slugs": ["price_syp", "syp"], "type": "currency"},
     {"key": "afn", "title": "افغانی", "slugs": ["price_afn", "afn"], "type": "currency"},
-    
+
     # ۳. شاخص‌های بورس ایران (۱۲ مورد)
     {"key": "bourse_total", "title": "شاخص کل", "slugs": ["bourse_total", "index_bourse"], "type": "bourse_iran"},
     {"key": "bourse_equal", "title": "شاخص کل هم‌وزن", "slugs": ["bourse_equal"], "type": "bourse_iran"},
@@ -95,7 +95,7 @@ TARGET_ITEMS = [
     {"key": "bourse_p50", "title": "شاخص قیمت ۵۰ شرکت", "slugs": ["bourse_p50"], "type": "bourse_iran"},
     {"key": "bourse_pequal", "title": "شاخص قیمت هم‌وزن", "slugs": ["bourse_pequal"], "type": "bourse_iran"},
     {"key": "bourse_pweighted", "title": "شاخص قیمت وزنی ارزشی", "slugs": ["bourse_pweighted"], "type": "bourse_iran"},
-    
+
     # ۴. شاخص‌های بورس جهانی (۱۲ مورد)
     {"key": "dow_jones", "title": "داوجونز", "slugs": ["dow_jones"], "type": "bourse_global"},
     {"key": "sp500", "title": "اس‌اندپی ۵۰۰", "slugs": ["sp500", "sp_500"], "type": "bourse_global"},
@@ -109,7 +109,7 @@ TARGET_ITEMS = [
     {"key": "shanghai", "title": "شانگهای چین", "slugs": ["shanghai"], "type": "bourse_global"},
     {"key": "ibex35", "title": "آیبکس اسپانیا", "slugs": ["ibex35"], "type": "bourse_global"},
     {"key": "tsx_canada", "title": "اس‌اندپی کانادا", "slugs": ["tsx"], "type": "bourse_global"},
-    
+
     # ۵. ارزهای دیجیتال (۱۷ مورد)
     {"key": "btc", "title": "بیت‌کوین", "slugs": ["crypto-bitcoin", "btc"], "type": "crypto"},
     {"key": "eth", "title": "اتریوم", "slugs": ["crypto-ethereum", "eth"], "type": "crypto"},
@@ -128,7 +128,7 @@ TARGET_ITEMS = [
     {"key": "avax", "title": "آوالانچ", "slugs": ["crypto-avalanche", "avax"], "type": "crypto"},
     {"key": "shib", "title": "شیبا اینو", "slugs": ["crypto-shiba-inu", "shib"], "type": "crypto"},
     {"key": "ton", "title": "تون‌کوین", "slugs": ["crypto-toncoin", "ton"], "type": "crypto"},
-    
+
     # ۶. انرژی (۶ مورد)
     {"key": "oil_crude", "title": "نفت سبک", "slugs": ["oil_crude"], "type": "commodity"},
     {"key": "oil_brent", "title": "نفت برنت", "slugs": ["oil_brent"], "type": "commodity"},
@@ -136,7 +136,7 @@ TARGET_ITEMS = [
     {"key": "gasoline", "title": "بنزین (RBOB)", "slugs": ["gasoline"], "type": "commodity"},
     {"key": "natural_gas", "title": "گاز طبیعی", "slugs": ["natural_gas"], "type": "commodity"},
     {"key": "coal", "title": "زغال‌سنگ", "slugs": ["coal"], "type": "commodity"},
-    
+
     # ۷. فلزات پایه (۶ مورد)
     {"key": "aluminum", "title": "آلومینیوم", "slugs": ["aluminum"], "type": "commodity"},
     {"key": "nickel", "title": "نیکل", "slugs": ["nickel"], "type": "commodity"},
@@ -144,7 +144,7 @@ TARGET_ITEMS = [
     {"key": "zinc", "title": "روی", "slugs": ["zinc"], "type": "commodity"},
     {"key": "copper", "title": "مس", "slugs": ["copper"], "type": "commodity"},
     {"key": "tin", "title": "قلع", "slugs": ["tin"], "type": "commodity"},
-    
+
     # ۸. کشاورزی (۶ مورد)
     {"key": "cotton", "title": "پنبه", "slugs": ["cotton"], "type": "commodity"},
     {"key": "sugar", "title": "شکر", "slugs": ["sugar"], "type": "commodity"},
@@ -208,17 +208,19 @@ def format_final_price(val: float, item_type: str) -> str:
 
 
 # ==========================================
-# ۳. کلاس اسکرابر اصلی
+# ۳. کلاس اسکریپر اصلی
 # ==========================================
 
 class TGJUScraper:
     def __init__(self):
-        self.headers = {
+        self.session = requests.Session()
+        self.session.headers.update({
             "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-        }
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
+        })
         self.raw_extracted_data = {}
 
     def fetch_all_pages(self):
@@ -235,9 +237,11 @@ class TGJUScraper:
 
         for url in urls:
             try:
-                res = requests.get(url, headers=self.headers, timeout=12)
+                res = self.session.get(url, timeout=15)
                 if res.status_code == 200:
                     self.parse_page_rows(res.text)
+                else:
+                    print(f"⚠️ وضعیت پاسخ غیرعادی برای {url}: کد {res.status_code}")
             except Exception as e:
                 print(f"⚠️ خطا در دریافت صفحه {url}: {e}")
 
@@ -271,7 +275,8 @@ class TGJUScraper:
             if not price_text and len(tds) >= 2:
                 price_text = tds[1].get_text(strip=True)
 
-            change_text = ""
+            change_amount_text = ""
+            change_percent_text = ""
             is_negative = False
 
             for td in tds[2:]:
@@ -281,12 +286,15 @@ class TGJUScraper:
                 if "low" in classes or "drop" in classes or "red" in classes or "-" in txt:
                     is_negative = True
 
-                if "%" in txt or "(" in txt or (re.search(r"\d", txt) and "high" in classes):
-                    change_text = txt
+                if "%" in txt:
+                    change_percent_text = txt
+                elif txt and re.search(r"\d", txt):
+                    change_amount_text = txt
 
             self.raw_extracted_data[key] = {
                 "raw_price": price_text,
-                "change_text": change_text,
+                "change_amount_text": change_amount_text,
+                "change_percent_text": change_percent_text,
                 "is_negative": is_negative,
             }
 
@@ -321,23 +329,22 @@ class TGJUScraper:
             num_price = parse_numeric_value(extracted_info["raw_price"])
             formatted_price = format_final_price(num_price, item_type)
 
-            raw_change = convert_persian_to_english_digits(extracted_info["change_text"])
+            raw_amount = convert_persian_to_english_digits(extracted_info.get("change_amount_text", ""))
+            raw_percent = convert_persian_to_english_digits(extracted_info.get("change_percent_text", ""))
             is_neg = extracted_info["is_negative"]
 
-            percent_match = re.search(r"\((.*?)\)", raw_change)
-            change_percent_val = percent_match.group(1).replace("%", "").strip() if percent_match else ""
+            num_change_amount = parse_numeric_value(raw_amount)
 
-            clean_change_str = re.sub(r"\(.*?\)", "", raw_change).replace("%", "").strip()
-            num_change_amount = parse_numeric_value(clean_change_str)
+            percent_match = re.search(r"([0-9.]+)", raw_percent)
+            change_percent_val = percent_match.group(1) if percent_match else ""
 
             if is_neg:
-                num_change_amount = -abs(num_change_amount)
+                if num_change_amount > 0:
+                    num_change_amount = -num_change_amount
                 if change_percent_val and not change_percent_val.startswith("-"):
                     change_percent_val = f"-{change_percent_val}"
             else:
                 num_change_amount = abs(num_change_amount)
-                if change_percent_val and change_percent_val.startswith("-"):
-                    change_percent_val = change_percent_val.replace("-", "")
 
             if num_change_amount == int(num_change_amount):
                 formatted_change_amount = f"{int(num_change_amount):,}"
@@ -345,7 +352,7 @@ class TGJUScraper:
                 formatted_change_amount = f"{num_change_amount:,.2f}"
 
             if change_percent_val:
-                formatted_change_percent = f"{change_percent_val}%" if not change_percent_val.endswith("%") else change_percent_val
+                formatted_change_percent = f"{change_percent_val}%"
             else:
                 formatted_change_percent = "0%"
 
@@ -359,7 +366,6 @@ class TGJUScraper:
             })
 
         df = pd.DataFrame(final_rows)
-        # تضمین ترتیب دقیق ستون‌ها
         cols = ["symbol_key", "title_fa", "price", "change_amount", "change_percent", "updated_at"]
         return df[cols]
 
@@ -376,9 +382,8 @@ def save_all_outputs(df: pd.DataFrame):
 
     # ۲. دیتابیس لوکال SQLite
     db_file = "market_prices.db"
-    conn_local = sqlite3.connect(db_file)
-    df.to_sql("market_prices", conn_local, if_exists="replace", index=False)
-    conn_local.close()
+    with sqlite3.connect(db_file) as conn_local:
+        df.to_sql("market_prices", conn_local, if_exists="replace", index=False)
     print(f"🗄️ دیتابیس لوکال SQLite بروزرسانی شد: {db_file}")
 
     # ۳. دیتابیس ابری Turso
@@ -388,12 +393,14 @@ def save_all_outputs(df: pd.DataFrame):
     if turso_url and turso_token:
         print("🌐 در حال ارسال و بروزرسانی داده‌ها در دیتابیس ابری Turso...")
         try:
-            import libsql_experimental as libsql
+            try:
+                import libsql
+            except ImportError:
+                import libsql_experimental as libsql
 
             conn_turso = libsql.connect(database=turso_url, auth_token=turso_token)
             cursor = conn_turso.cursor()
 
-            # ساخت جدول در صورت عدم وجود
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS market_prices (
                     symbol_key TEXT PRIMARY KEY,
@@ -405,7 +412,6 @@ def save_all_outputs(df: pd.DataFrame):
                 );
             """)
 
-            # بازنویسی و بروزرسانی تک‌تک سطرها به‌صورت دقیق
             for _, row in df.iterrows():
                 cursor.execute("""
                     INSERT INTO market_prices (symbol_key, title_fa, price, change_amount, change_percent, updated_at)
