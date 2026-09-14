@@ -2,7 +2,7 @@ name: TGJU Market Data Scraper
 
 on:
   schedule:
-    - cron: '*/10 * * * *'  # اجرای خودکار هر ۱۰ دقیقه
+    - cron: '*/20 * * * *'  # اجرای خودکار هر ۱۰ دقیقه
   workflow_dispatch:        # قابلیت اجرای دستی از تب Actions
 
 jobs:
