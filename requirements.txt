@@ -1,6 +1,5 @@
 requests
 beautifulsoup4
-pandas
-openpyxl
+pytz
+jdatetime
 libsql-experimental
-jdatetime==5.0.0
