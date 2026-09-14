@@ -156,6 +156,27 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+def clean_title(text: str) -> str:
+    """حذف کاراکترهای نیم‌فاصله/فاصله اضافه برای مقایسه دقیق عنوان ردیف با کلیدهای SYMBOL_MAP"""
+    if not text:
+        return ""
+    return text.replace('\u200c', ' ').replace('\u200f', '').strip()
+    
+def get_cell_text(tag) -> str:
+    """
+    استخراج متن یک سلول با درج فاصله بین گره‌های تودرتو.
+    نکته مهم: get_text(strip=True) بدون separator می‌تواند باعث بشود اعداد چند
+    اسپن/عنصر تودرتو (مثلا مقدار اصلی + دیتای مخفی سری تاریخی/اسپارک‌لاین) بدون هیچ
+    جداکننده‌ای به هم بچسبند و یک عدد غول‌آسا و بی‌معنی تولید شود
+    (نمونه واقعی مشاهده‌شده در دیتابیس: سکه بهار آزادی).
+    با گذاشتن separator=" " از این باگ جلوگیری می‌شود.
+    """
+    if tag is None:
+        return ""
+    if isinstance(tag, str):
+        return tag
+    return tag.get_text(" ", strip=True)
+
 def to_english_digits(text: str) -> str:
     if not text:
         return ""
@@ -191,13 +212,19 @@ def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float
     elif "هزار" in raw_text:
         val *= 1_000
 
+    # صحت‌سنجی: اگر عدد استخراج‌شده بیش از حد بزرگ باشد (بیشتر از ۱۵ رقم)
+    # تقریبا قطعی است که چند عدد جدا از هم به اشتباه به هم چسبیده‌اند
+    # (باگ get_text بدون separator). به‌جای ثبت یک عدد بی‌معنی، آن را نامعتبر می‌کنیم.
+    if val != 0 and len(str(int(val))) > 15:
+        return "-", 0.0
+
     return format_number_with_comma(val), val
 
 def is_cell_red(cell_tag) -> bool:
     """تشخیص قرمز بودن سلول تغییرات جهت اعمال علامت منفی"""
     if not cell_tag:
         return False
-    text = cell_tag if isinstance(cell_tag, str) else cell_tag.get_text()
+    text = get_cell_text(cell_tag)
     if "-" in text or "−" in text or "🔻" in text:
         return True
     
@@ -219,7 +246,7 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
     if not change_cell:
         return "0", "0%"
     
-    raw_text = change_cell if isinstance(change_cell, str) else change_cell.get_text(strip=True)
+    raw_text = get_cell_text(change_cell)
     clean_text = to_english_digits(raw_text)
     is_red = is_cell_red(change_cell)
 
@@ -239,6 +266,14 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
 
     pct_val = pct_val or 0.0
 
+    # صحت‌سنجی: درصد تغییر روزانه بیش از ۱۰۰٪ تقریبا همیشه نشانه‌ی این است که
+    # amt_val و price_val از دو ستون/واحد متفاوت (مثلا تومان و دلار، یا دو ردیف
+    # مختلف) استخراج شده‌اند، نه یک تغییر روزانه واقعی. در این حالت به‌جای ثبت
+    # عددی گمراه‌کننده (مثل -۱۵۳۰۴۳٪) آن را صفر می‌کنیم.
+    if abs(pct_val) > 100:
+        pct_val = 0.0
+        amt_val = 0.0
+
     if is_red:
         amt_str = f"-{format_number_with_comma(amt_val)}" if amt_val != 0 else "0"
         pct_str = f"-{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
@@ -247,6 +282,26 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
         pct_str = f"{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
 
     return amt_str, pct_str
+
+def is_real_data_table(table, header_cells) -> bool:
+    """
+    فیلتر کردن جدول‌های غیرواقعی صفحه اصلی (فرم‌های محاسبه‌گر مثل «محاسبه‌گر
+    قیمت طلا» یا «حباب سنج سکه»، دراپ‌داون انتخاب نوع سکه و ...).
+    این جدول‌ها ظاهرا شبیه جدول قیمت هستند ولی سلول اول‌شان یک برچسب مثل
+    «قیمت دلار (ریال):» است که چون شامل رشته «دلار» است به‌اشتباه با نماد
+    دلار match می‌شود، و چون سلول قیمت واقعی ندارند یا حاوی <input>/<select>
+    هستند مقدار نهایی «-» یا عددی نامعتبر می‌شود.
+    """
+    # اگر جدول حاوی عنصر ورودی/انتخاب باشد، قطعا یک فرم است نه جدول قیمت
+    if table.find(["input", "select", "button"]) is not None:
+        return False
+
+    header_text = " ".join(get_cell_text(c) for c in header_cells)
+    # جدول‌های واقعی قیمت روی صفحه اصلی همیشه هم ستون «قیمت زنده/ارزش» و هم
+    # ستون «تغییر» را در هدر خود دارند
+    has_price_col = any(k in header_text for k in ["قیمت زنده", "قیمت", "ارزش"])
+    has_change_col = "تغییر" in header_text
+    return has_price_col and has_change_col
 
 def scrape_homepage_data():
     print("در حال دریافت داده‌ها از tgju.org ...", flush=True)
@@ -263,29 +318,46 @@ def scrape_homepage_data():
             for table in soup.find_all("table"):
                 price_col_idx, change_col_idx = 1, 2
                 header_tr = table.find("tr")
-                
+                header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+
+                # رد کردن فرم‌های محاسبه‌گر/دراپ‌داون‌ها که جدول قیمت واقعی نیستند
+                if not is_real_data_table(table, header_cells):
+                    continue
+
                 # پیدا کردن دقیق ایندکس ستون "ارزش" یا "قیمت" در هدر جدول
-                if header_tr:
-                    cols = header_tr.find_all(["th", "td"])
-                    for idx, c in enumerate(cols):
-                        c_txt = c.get_text(strip=True)
-                        if "ارزش" in c_txt:
-                            price_col_idx = idx
-                        elif any(k in c_txt for k in ["قیمت", "قیمت زنده", "قیمت (ریال)"]) and price_col_idx == 1:
-                            price_col_idx = idx
-                        elif "تغییر" in c_txt:
-                            change_col_idx = idx
+                for idx, c in enumerate(header_cells):
+                    c_txt = get_cell_text(c)
+                    if "ارزش" in c_txt:
+                        price_col_idx = idx
+                    elif any(k in c_txt for k in ["قیمت", "قیمت زنده", "قیمت (ریال)"]) and price_col_idx == 1:
+                        price_col_idx = idx
+                    elif "تغییر" in c_txt:
+                        change_col_idx = idx
 
                 for row in table.find_all("tr"):
                     cols = row.find_all(["td", "th"])
                     if not cols or len(cols) < 2:
                         continue
-                    
-                    row_title = cols[0].get_text(strip=True)
+
+                    row_title = clean_title(get_cell_text(cols[0]))
                     if "حباب" in row_title:
                         continue
 
-                    matched_fa = next((t for t in sorted_targets if t in row_title or t in row.get_text()), None)
+                    # مهم: تطبیق فقط روی عنوان ردیف (ستون اول) انجام می‌شود، نه
+                    # روی کل متن ردیف. تطبیق روی کل ردیف باعث می‌شد اگر یک ستون
+                    # دیگر (مثلا یک دراپ‌داون یا برچسب) به‌طور اتفاقی حاوی اسم یک
+                    # نماد دیگر باشد، آن ردیف به‌اشتباه match شود.
+                    matched_fa = next(
+                        (t for t in sorted_targets if clean_title(t) == row_title),
+                        None
+                    )
+                    # اگر تطبیق دقیق پیدا نشد، به‌عنوان راه دوم substring را هم
+                    # امتحان می‌کنیم (برای مواردی که سایت پسوند/پیشوند اضافه دارد)
+                    if not matched_fa:
+                        matched_fa = next(
+                            (t for t in sorted_targets if clean_title(t) in row_title),
+                            None
+                        )
                     if matched_fa:
                         symbol_keys = SYMBOL_MAP[matched_fa]
                         primary_key = symbol_keys[0]
@@ -299,7 +371,8 @@ def scrape_homepage_data():
                         # ۲. کالاهای اساسی: انتخاب ستون قیمت/دلار
                         elif primary_key in COMMODITIES:
                             for c in cols[1:]:
-                                if "$" in c.get_text() or "دلار" in c.get_text():
+                                c_txt = get_cell_text(c)
+                                if "$" in c_txt or "دلار" in c_txt:
                                     price_cell = c
                                     break
 
@@ -307,11 +380,9 @@ def scrape_homepage_data():
                         elif primary_key in INDICES:
                             found_val = False
                             for idx, c in enumerate(cols):
-                                c_text = c.get_text(strip=True)
+                                c_text = get_cell_text(c)
                                 if c_text and c_text != "-" and any(char.isdigit() for char in c_text):
-                                    # بررسی هدر متناظر برای اطمینان از ستون ارزش یا قیمت اصلی
-                                    header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
-                                    h_text = header_cells[idx].get_text(strip=True) if idx < len(header_cells) else ""
+                                    h_text = get_cell_text(header_cells[idx]) if idx < len(header_cells) else ""
                                     if "ارزش" in h_text or "قیمت" in h_text or idx == price_col_idx:
                                         price_cell = c
                                         found_val = True
@@ -319,7 +390,7 @@ def scrape_homepage_data():
                             if not found_val and len(cols) > price_col_idx:
                                 price_cell = cols[price_col_idx]
 
-                        price_str, price_num = parse_price_value(price_cell.get_text(strip=True), is_index=(primary_key in INDICES))
+                        price_str, price_num = parse_price_value(get_cell_text(price_cell), is_index=(primary_key in INDICES))
                         
                         change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
                         change_amt, change_pct = parse_changes(change_cell, price_num)
@@ -329,6 +400,7 @@ def scrape_homepage_data():
                                 "symbol_key": skey,
                                 "title_fa": matched_fa,
                                 "price": price_str,
+                                "price_num": price_num,
                                 "change_amount": change_amt,
                                 "change_percent": change_pct,
                                 "updated_at": updated_at
@@ -336,7 +408,18 @@ def scrape_homepage_data():
     except Exception as e:
         print(f"خطا در استخراج: {e}", flush=True)
 
-    unique_data = {item["symbol_key"]: item for item in scraped_data}
+    # به‌جای «آخرین match برنده است»، اگر برای یک نماد چند ردیف/جدول پیدا شد،
+    # اولین مقداری که معتبر است (قیمت "-" نیست) را نگه می‌داریم و دیگر با یک
+    # مقدار "-"/نامعتبر از جدول بعدی رویش نمی‌نویسیم.
+    unique_data = {}
+    for item in scraped_data:
+        key = item["symbol_key"]
+        if key not in unique_data or unique_data[key]["price"] == "-":
+            unique_data[key] = item
+
+    for item in unique_data.values():
+        item.pop("price_num", None)
+
     return list(unique_data.values())
 
 def get_db_connection():
