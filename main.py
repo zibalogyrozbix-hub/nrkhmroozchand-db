@@ -5,6 +5,7 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 import pytz
+import jdatetime
 
 try:
     import libsql_experimental as libsql
@@ -12,30 +13,22 @@ try:
 except ImportError:
     HAS_LIBSQL = False
 
-# نگاشت جامع کلیدها به نام‌های فارسی در سایت TGJU
+# نگاشت کامل کلیه کلیدهای اصلی و تکراری دیتابیس
 SYMBOL_MAP = {
-    # طلا، سکه و حباب‌ها
+    # طلا، سکه و صندوق‌ها
     "سکه امامی": ["coin_emami"],
-    "حباب سکه امامی": ["bubble_emami"],
     "سکه بهار آزادی": ["coin_azadi"],
-    "حباب سکه بهار آزادی": ["bubble_azadi"],
     "نیم سکه": ["coin_half"],
-    "حباب نیم‌سکه": ["bubble_half"],
     "ربع سکه": ["coin_quarter"],
-    "حباب ربع‌سکه": ["bubble_quarter"],
     "سکه گرمی": ["coin_gram"],
-    "حباب سکه گرمی": ["bubble_gram"],
     "طلای ۱۸ عیار": ["gold_18k"],
     "طلای ۲۴ عیار": ["gold_24k"],
     "طلای دست دوم": ["gold_used"],
     "مثقال طلا": ["gold_mesghal"],
-    "مثقال بدون حباب": ["mesghal_no_bubble"],
     "انس طلا": ["gold_ounce"],
     "گرم نقره ۹۹۹": ["silver_gram"],
     "آبشده نقدی": ["abshedeh_cash"],
     "آبشده معاملاتی": ["abshedeh_trade"],
-    
-    # صندوق‌های طلا
     "صندوق طلای عیار": ["fund_ayar", "etf_ayar"],
     "صندوق طلای لوتوس": ["fund_lotus", "etf_lotus"],
     "صندوق طلای گوهر": ["fund_gohar", "etf_gohar"],
@@ -104,7 +97,7 @@ SYMBOL_MAP = {
     "دش": ["dash"],
     "بایننس کوین": ["bnb"],
 
-    # کالاهای اساسی و انرژی
+    # کالاهای اساسی و انرژی (ستون قیمت / دلار)
     "پنبه": ["cotton"],
     "شکر": ["sugar"],
     "سویا": ["soybeans"],
@@ -124,7 +117,7 @@ SYMBOL_MAP = {
     "گاز طبیعی": ["natural_gas"],
     "زغال سنگ": ["coal"],
 
-    # شاخص‌ها (ستون ارزش + تبدیل میلیون/هزار)
+    # شاخص‌های بورس و جهانی (ستون ارزش + تبدیل میلیون و هزار)
     "شاخص کل": ["bourse_total"],
     "شاخص کل هم‌وزن": ["bourse_equal"],
     "شاخص کل هم وزن": ["bourse_equal"],
@@ -155,6 +148,7 @@ SYMBOL_MAP = {
     "اس‌اندپی کانادا": ["tsx_canada"]
 }
 
+# گروه‌بندی جهت اعمال قوانین استخراج
 COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum", "nickel", "lead", "zinc", "copper", "tin", "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"}
 INDICES = {"bourse_total", "bourse_equal", "fara_total", "ifb_market1", "fara_m1", "ifb_market2", "fara_m2", "bourse_market1", "bourse_m1", "bourse_market2", "bourse_m2", "bourse_30", "bourse_50", "bourse_p50", "bourse_pequal", "bourse_pweighted", "dow_jones", "sp500", "nasdaq", "smi_swiss", "nifty_50", "nifty50", "ftse_100", "ftse100", "dax", "cac_40", "nikkei_225", "nikkei225", "shanghai_composite", "shanghai", "ibex_35", "ibex35", "tsx_canada"}
 CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
@@ -167,9 +161,13 @@ def to_english_digits(text: str) -> str:
     if not text:
         return ""
     text = text.replace('−', '-').replace('–', '-').replace(',', '').replace('،', '')
-    return text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    persian_digits = "۰۱۲۳۴۵۶۷۸۹"
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+    english_digits = "0123456789"
+    translation = str.maketrans(persian_digits + arabic_digits, english_digits * 2)
+    return text.translate(translation)
 
-def format_number(val: float) -> str:
+def format_number_with_comma(val: float) -> str:
     if val is None:
         return "-"
     if val.is_integer():
@@ -177,6 +175,7 @@ def format_number(val: float) -> str:
     return f"{val:,.2f}".rstrip('0').rstrip('.')
 
 def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float]:
+    """استخراج عدد قیمت و تبدیل کلمات میلیون/هزار به عدد کامل با فرمت ۳ رقمی"""
     if not raw_text or raw_text == "-":
         return "-", 0.0
     
@@ -193,9 +192,10 @@ def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float
     elif "هزار" in raw_text:
         val *= 1_000
 
-    return format_number(val), val
+    return format_number_with_comma(val), val
 
 def is_cell_red(cell_tag) -> bool:
+    """تشخیص قرمز بودن سلول تغییرات جهت اعمال علامت منفی"""
     if not cell_tag:
         return False
     text = cell_tag if isinstance(cell_tag, str) else cell_tag.get_text()
@@ -204,15 +204,19 @@ def is_cell_red(cell_tag) -> bool:
     
     if not isinstance(cell_tag, str):
         classes = list(cell_tag.get("class", []))
+        for child in cell_tag.find_all(True):
+            classes.extend(child.get("class", []))
         if cell_tag.parent:
             classes.extend(cell_tag.parent.get("class", []))
+        
         class_str = " ".join([str(c) for c in classes]).lower()
         style_str = str(cell_tag.get("style", "")).lower()
-        if any(kw in class_str for kw in ["low", "drop", "red", "danger", "down", "minus"]) or "color: red" in style_str:
+        if any(kw in class_str for kw in ["low", "drop", "red", "danger", "down", "minus"]) or "color: red" in style_str or "color:#f" in style_str:
             return True
     return False
 
 def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
+    """تفکیک change_amount و change_percent و اعمال منفی/مثبت بر اساس رنگ"""
     if not change_cell:
         return "0", "0%"
     
@@ -220,6 +224,7 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
     clean_text = to_english_digits(raw_text)
     is_red = is_cell_red(change_cell)
 
+    # استخراج درصد داخل پرانتز
     pct_match = re.search(r'\(([^)]+)\)', clean_text)
     pct_val = None
     if pct_match:
@@ -227,26 +232,29 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
         if pct_num_match:
             pct_val = float(pct_num_match.group(1))
 
+    # استخراج مبلغ تغییر (عدد بدون پرانتز)
     text_no_parentheses = re.sub(r'\([^)]*\)', '', clean_text)
     amt_match = re.search(r'(\d+(?:\.\d+)?)', text_no_parentheses)
     amt_val = float(amt_match.group(1)) if amt_match else 0.0
 
+    # محاسبه خودکار درصد در صورت عدم وجود در سورس
     if pct_val is None and price_val > 0 and amt_val > 0:
         pct_val = (amt_val / price_val) * 100
 
     pct_val = pct_val or 0.0
 
+    # اعمال علامت بر اساس رنگ
     if is_red:
-        amt_str = f"-{format_number(amt_val)}" if amt_val != 0 else "0"
+        amt_str = f"-{format_number_with_comma(amt_val)}" if amt_val != 0 else "0"
         pct_str = f"-{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
     else:
-        amt_str = format_number(amt_val)
+        amt_str = format_number_with_comma(amt_val)
         pct_str = f"{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
 
     return amt_str, pct_str
 
 def scrape_homepage_data():
-    print("در حال دریافت داده‌های به‌روز از tgju.org ...", flush=True)
+    print("در حال دریافت داده‌ها از tgju.org ...", flush=True)
     scraped_data = []
     sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
     tehran_tz = pytz.timezone('Asia/Tehran')
@@ -274,27 +282,34 @@ def scrape_homepage_data():
                         continue
                     
                     row_title = cols[0].get_text(strip=True)
+                    if "حباب" in row_title:
+                        continue
 
-                    matched_fa = next((t for t in sorted_targets if t == row_title or t in row_title), None)
+                    matched_fa = next((t for t in sorted_targets if t in row_title or t in row.get_text()), None)
                     if matched_fa:
                         symbol_keys = SYMBOL_MAP[matched_fa]
                         primary_key = symbol_keys[0]
 
+                        # استخراج ستون مربوطه طبق قوانین اعلام شده
                         price_cell = cols[price_col_idx] if len(cols) > price_col_idx else cols[1]
                         
-                        # قوانین اختصاصی ستون‌ها
+                        # ۱. رمزارزها: انتخاب ستون قیمت ریالی (ستون اول قیمت)
                         if primary_key in CRYPTO and len(cols) >= 3:
-                            price_cell = cols[1] # قیمت ریالی
+                            price_cell = cols[1]
+
+                        # ۲. کالاهای اساسی: انتخاب ستون قیمت/دلار
                         elif primary_key in COMMODITIES:
                             for c in cols[1:]:
                                 if "$" in c.get_text() or "دلار" in c.get_text():
                                     price_cell = c
                                     break
-                        elif primary_key in INDICES or "bubble" in primary_key:
+
+                        # ۳. شاخص‌ها: انتخاب ستون ارزش
+                        elif primary_key in INDICES:
                             for idx, c in enumerate(cols):
-                                c_text = c.get_text()
-                                if "ارزش" in c_text or "قیمت" in c_text or idx == 1:
+                                if "ارزش" in c.get_text():
                                     price_cell = cols[idx]
+                                    break
 
                         price_str, price_num = parse_price_value(price_cell.get_text(strip=True), is_index=(primary_key in INDICES))
                         
@@ -315,3 +330,60 @@ def scrape_homepage_data():
 
     unique_data = {item["symbol_key"]: item for item in scraped_data}
     return list(unique_data.values())
+
+def get_db_connection():
+    turso_url = os.environ.get("TURSO_DATABASE_URL", "").strip()
+    turso_token = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+    
+    if turso_url and turso_token and HAS_LIBSQL:
+        if turso_url.startswith("libsql://"):
+            turso_url = turso_url.replace("libsql://", "https://")
+        elif not turso_url.startswith("https://"):
+            turso_url = f"https://{turso_url}"
+        print(f"اتصال مستقیم به دیتابیس Turso ({turso_url}) ...", flush=True)
+        return libsql.connect(database=turso_url, auth_token=turso_token)
+    else:
+        print("اتصال به SQLite محلی ...", flush=True)
+        return sqlite3.connect("market_database.db")
+
+def update_database(data_list):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS market_prices (
+            symbol_key TEXT PRIMARY KEY,
+            title_fa TEXT,
+            price TEXT,
+            change_amount TEXT,
+            change_percent TEXT,
+            updated_at TEXT
+        )
+    """)
+    
+    for item in data_list:
+        cursor.execute("""
+            INSERT INTO market_prices (symbol_key, title_fa, price, change_amount, change_percent, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(symbol_key) DO UPDATE SET
+                price = excluded.price,
+                change_amount = excluded.change_amount,
+                change_percent = excluded.change_percent,
+                updated_at = excluded.updated_at
+        """, (
+            item["symbol_key"],
+            item["title_fa"],
+            item["price"],
+            item["change_amount"],
+            item["change_percent"],
+            item["updated_at"]
+        ))
+    
+    conn.commit()
+    conn.close()
+    print(f"تعداد {len(data_list)} شاخص در جدول market_prices بروزرسانی شد.", flush=True)
+
+if __name__ == "__main__":
+    data = scrape_homepage_data()
+    if data:
+        update_database(data)
