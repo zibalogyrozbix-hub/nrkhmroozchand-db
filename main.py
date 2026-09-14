@@ -224,15 +224,16 @@ class TGJUScraper:
         self.raw_extracted_data = {}
 
     def fetch_all_pages(self):
+        # آدرس‌های استاندارد و واقعی سایت TGJU جهت جلوگیری از خطای 404
         urls = [
             "https://www.tgju.org/",
             "https://www.tgju.org/gold-chart",
             "https://www.tgju.org/currency",
             "https://www.tgju.org/crypto",
-            "https://www.tgju.org/stock",
-            "https://www.tgju.org/oil-energy",
-            "https://www.tgju.org/metals",
-            "https://www.tgju.org/agriculture",
+            "https://www.tgju.org/bourse",
+            "https://www.tgju.org/energy",
+            "https://www.tgju.org/metal",
+            "https://www.tgju.org/commodity",
         ]
 
         for url in urls:
