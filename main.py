@@ -29,6 +29,16 @@ SYMBOL_MAP = {
     "گرم نقره ۹۹۹": ["silver_gram"],
     "آبشده نقدی": ["abshedeh_cash"],
     "آبشده معاملاتی": ["abshedeh_trade"],
+    "انس نقره": ["silver_ounce"],
+    "انس پلاتین": ["platinum_ounce"],
+    "انس پالادیوم": ["palladium_ounce"],
+    "مثقال / بدون حباب": ["mesghal_no_bubble"],
+    "مثقال بدون حباب": ["mesghal_no_bubble"],
+    "حباب سکه امامی": ["bubble_emami"],
+    "حباب سکه بهار آزادی": ["bubble_azadi"],
+    "حباب نیم سکه": ["bubble_half"],
+    "حباب ربع سکه": ["bubble_quarter"],
+    "حباب سکه گرمی": ["bubble_gram"],
     "صندوق طلای عیار": ["fund_ayar", "etf_ayar"],
     "صندوق طلای لوتوس": ["fund_lotus", "etf_lotus"],
     "صندوق طلای گوهر": ["fund_gohar", "etf_gohar"],
@@ -187,10 +197,10 @@ def to_english_digits(text: str) -> str:
     translation = str.maketrans(persian_digits + arabic_digits, english_digits * 2)
     return text.translate(translation)
 
-def format_number_with_comma(val: float) -> str:
+def format_number_with_comma(val) -> str:
     if val is None:
         return "-"
-    if val.is_integer():
+    if isinstance(val, int) or (isinstance(val, float) and val.is_integer()):
         return f"{int(val):,}"
     return f"{val:,.2f}".rstrip('0').rstrip('.')
 
@@ -203,20 +213,20 @@ def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float
     match = re.search(r'(\d+(?:\.\d+)?)', clean_text)
     if not match:
         return "-", 0.0
-    
-    val = float(match.group(1))
+
+    num_str = match.group(1)
+    # برای اعداد صحیح بزرگ (مثل قیمت سکه/طلا به ریال) از int با دقت نامحدود
+    # پایتون استفاده می‌کنیم تا هیچ رقمی به‌خاطر گرد شدن float از بین نرود.
+    if "." not in num_str:
+        val = int(num_str)
+    else:
+        val = float(num_str)
     
     if is_index or "میلیون" in raw_text or "میلیون" in clean_text:
         if "میلیون" in raw_text:
-            val *= 1_000_000
+            val = val * 1_000_000
     elif "هزار" in raw_text:
-        val *= 1_000
-
-    # صحت‌سنجی: اگر عدد استخراج‌شده بیش از حد بزرگ باشد (بیشتر از ۱۵ رقم)
-    # تقریبا قطعی است که چند عدد جدا از هم به اشتباه به هم چسبیده‌اند
-    # (باگ get_text بدون separator). به‌جای ثبت یک عدد بی‌معنی، آن را نامعتبر می‌کنیم.
-    if val != 0 and len(str(int(val))) > 15:
-        return "-", 0.0
+        val = val * 1_000
 
     return format_number_with_comma(val), val
 
@@ -283,6 +293,20 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
 
     return amt_str, pct_str
 
+def find_header_col(header_cells, target_patterns) -> int:
+    """
+    پیدا کردن ایندکس ستون بر اساس متن سرستون (بدون توجه به فاصله‌های اضافه).
+    برای مواردی که باید مطمئن باشیم دقیقاً از ستون درست («قیمت / دلار» برای
+    کالاها، یا «ارزش» برای شاخص‌های بورسی) می‌خوانیم، نه از هر سلولی که
+    تصادفاً عدد یا علامت $ دارد.
+    """
+    for idx, c in enumerate(header_cells):
+        h_norm = get_cell_text(c).replace(" ", "").replace("\u200c", "")
+        for pat in target_patterns:
+            if pat.replace(" ", "") in h_norm:
+                return idx
+    return -1
+
 def is_real_data_table(table, header_cells) -> bool:
     """
     فیلتر کردن جدول‌های غیرواقعی صفحه اصلی (فرم‌های محاسبه‌گر مثل «محاسبه‌گر
@@ -340,8 +364,6 @@ def scrape_homepage_data():
                         continue
 
                     row_title = clean_title(get_cell_text(cols[0]))
-                    if "حباب" in row_title:
-                        continue
 
                     # مهم: تطبیق فقط روی عنوان ردیف (ستون اول) انجام می‌شود، نه
                     # روی کل متن ردیف. تطبیق روی کل ردیف باعث می‌شد اگر یک ستون
@@ -368,27 +390,40 @@ def scrape_homepage_data():
                         if primary_key in CRYPTO and len(cols) >= 3:
                             price_cell = cols[1]
 
-                        # ۲. کالاهای اساسی: انتخاب ستون قیمت/دلار
+                        # ۲. کالاهای اساسی/فلزات پایه/نفت و انرژی: قیمت را حتما
+                        # از ستونی با سرستون دقیق «قیمت / دلار» می‌خوانیم، نه از
+                        # هر سلولی که تصادفا نماد $ یا کلمه دلار داشته باشد.
                         elif primary_key in COMMODITIES:
-                            for c in cols[1:]:
-                                c_txt = get_cell_text(c)
-                                if "$" in c_txt or "دلار" in c_txt:
-                                    price_cell = c
-                                    break
-
-                        # ۳. شاخص‌ها: استخراج حتمی از ستون "ارزش"
-                        elif primary_key in INDICES:
-                            found_val = False
-                            for idx, c in enumerate(cols):
-                                c_text = get_cell_text(c)
-                                if c_text and c_text != "-" and any(char.isdigit() for char in c_text):
-                                    h_text = get_cell_text(header_cells[idx]) if idx < len(header_cells) else ""
-                                    if "ارزش" in h_text or "قیمت" in h_text or idx == price_col_idx:
+                            usd_col = find_header_col(header_cells, ["قیمت/دلار", "قیمت ($)", "قیمت$"])
+                            if usd_col != -1 and usd_col < len(cols):
+                                price_cell = cols[usd_col]
+                            else:
+                                # راه دوم (fallback) اگر چنین سرستونی پیدا نشد
+                                for c in cols[1:]:
+                                    c_txt = get_cell_text(c)
+                                    if "$" in c_txt or "دلار" in c_txt:
                                         price_cell = c
-                                        found_val = True
                                         break
-                            if not found_val and len(cols) > price_col_idx:
-                                price_cell = cols[price_col_idx]
+
+                        # ۳. شاخص‌های بورس/فرابورس: قیمت را حتما از ستون «ارزش»
+                        # می‌خوانیم و اعداد بزرگ/کلمات میلیون و هزار را دست
+                        # نمی‌زنیم (فقط تبدیل عددی می‌شوند، حذف نمی‌شوند).
+                        elif primary_key in INDICES:
+                            value_col = find_header_col(header_cells, ["ارزش"])
+                            if value_col != -1 and value_col < len(cols):
+                                price_cell = cols[value_col]
+                            else:
+                                found_val = False
+                                for idx, c in enumerate(cols):
+                                    c_text = get_cell_text(c)
+                                    if c_text and c_text != "-" and any(char.isdigit() for char in c_text):
+                                        h_text = get_cell_text(header_cells[idx]) if idx < len(header_cells) else ""
+                                        if "ارزش" in h_text or "قیمت" in h_text or idx == price_col_idx:
+                                            price_cell = c
+                                            found_val = True
+                                            break
+                                if not found_val and len(cols) > price_col_idx:
+                                    price_cell = cols[price_col_idx]
 
                         price_str, price_num = parse_price_value(get_cell_text(price_cell), is_index=(primary_key in INDICES))
                         
