@@ -3,3 +3,4 @@ beautifulsoup4
 pandas
 openpyxl
 libsql-experimental
+jdatetime==5.0.0
