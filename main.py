@@ -39,15 +39,15 @@ SYMBOL_MAP = {
     "حباب نیم سکه": ["bubble_half"],
     "حباب ربع سکه": ["bubble_quarter"],
     "حباب سکه گرمی": ["bubble_gram"],
-    "صندوق طلای عیار": ["fund_ayar", "etf_ayar"],
-    "صندوق طلای لوتوس": ["fund_lotus", "etf_lotus"],
-    "صندوق طلای گوهر": ["fund_gohar", "etf_gohar"],
-    "صندوق طلای مثقال": ["fund_mesghal", "etf_mesghal"],
-    "صندوق طلای کهربا": ["fund_kahreba", "etf_kahroba"],
-    "صندوق طلای ناب": ["fund_nab", "etf_nab"],
-    "صندوق طلای ریتون": ["fund_riton", "etf_reyton"],
-    "صندوق طلای تابش": ["fund_tabesh", "etf_tabesh"],
-    "صندوق طلای زروان": ["fund_zarvan", "etf_zarvan"],
+    "صندوق طلای عیار": ["fund_ayar"],
+    "صندوق طلای لوتوس": ["fund_lotus"],
+    "صندوق طلای گوهر": ["fund_gohar"],
+    "صندوق طلای مثقال": ["fund_mesghal"],
+    "صندوق طلای کهربا": ["fund_kahreba"],
+    "صندوق طلای ناب": ["fund_nab"],
+    "صندوق طلای ریتون": ["fund_riton"],
+    "صندوق طلای تابش": ["fund_tabesh"],
+    "صندوق طلای زروان": ["fund_zarvan"],
     
     # ارزهای سنتی
     "دلار": ["usd"],
@@ -132,10 +132,10 @@ SYMBOL_MAP = {
     "شاخص کل هم‌وزن": ["bourse_equal"],
     "شاخص کل هم وزن": ["bourse_equal"],
     "شاخص فرابورس": ["fara_total"],
-    "بازار اول فرابورس": ["ifb_market1", "fara_m1"],
-    "بازار دوم فرابورس": ["ifb_market2", "fara_m2"],
-    "شاخص بازار اول": ["bourse_market1", "bourse_m1"],
-    "شاخص بازار دوم": ["bourse_market2", "bourse_m2"],
+    "بازار اول فرابورس": ["ifb_market1"],
+    "بازار دوم فرابورس": ["ifb_market2"],
+    "شاخص بازار اول": ["bourse_market1"],
+    "شاخص بازار دوم": ["bourse_market2"],
     "شاخص ۳۰ شرکت بزرگ": ["bourse_30"],
     "شاخص ۳۰ شرکت": ["bourse_30"],
     "شاخص ۵۰ شرکت فعال‌تر": ["bourse_50"],
@@ -148,18 +148,19 @@ SYMBOL_MAP = {
     "نزدک": ["nasdaq"],
     "اس‌ام‌آی سوئیس": ["smi_swiss"],
     "اس ام آی سوئیس": ["smi_swiss"],
-    "نیفتی ۵۰": ["nifty_50", "nifty50"],
-    "فتسی بریتانیا": ["ftse_100", "ftse100"],
+    "نیفتی ۵۰": ["nifty_50"],
+    "نیفتی 50": ["nifty_50"],
+    "فتسی بریتانیا": ["ftse_100"],
     "دکس آلمان": ["dax"],
     "کک فرانسه": ["cac_40"],
-    "نیکی ژاپن": ["nikkei_225", "nikkei225"],
-    "شانگهای چین": ["shanghai_composite", "shanghai"],
-    "آیبکس اسپانیا": ["ibex_35", "ibex35"],
+    "نیکی ژاپن": ["nikkei_225"],
+    "شانگهای چین": ["shanghai_composite"],
+    "آیبکس اسپانیا": ["ibex_35"],
     "اس‌اندپی کانادا": ["tsx_canada"]
 }
 
 COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum", "nickel", "lead", "zinc", "copper", "tin", "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"}
-INDICES = {"bourse_total", "bourse_equal", "fara_total", "ifb_market1", "fara_m1", "ifb_market2", "fara_m2", "bourse_market1", "bourse_m1", "bourse_market2", "bourse_m2", "bourse_30", "bourse_50", "bourse_p50", "bourse_pequal", "bourse_pweighted", "dow_jones", "sp500", "nasdaq", "smi_swiss", "nifty_50", "nifty50", "ftse_100", "ftse100", "dax", "cac_40", "nikkei_225", "nikkei225", "shanghai_composite", "shanghai", "ibex_35", "ibex35", "tsx_canada"}
+INDICES = {"bourse_total", "bourse_equal", "fara_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_30", "bourse_50", "bourse_p50", "bourse_pequal", "bourse_pweighted", "dow_jones", "sp500", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35", "tsx_canada"}
 CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
 
 HEADERS = {
@@ -441,10 +442,17 @@ def scrape_homepage_data():
                         change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
                         change_amt, change_pct = parse_changes(change_cell, price_num)
 
+                        # برای شاخص‌های کالایی/فلزات پایه/نفت و انرژی که قیمت‌شان
+                        # به دلار است، عبارت «(دلار)» به انتهای نام فارسی اضافه
+                        # می‌شود تا با اعداد ریالی بقیه دیتابیس اشتباه گرفته نشود.
+                        display_title = matched_fa
+                        if primary_key in COMMODITIES and "(دلار)" not in display_title:
+                            display_title = f"{display_title} (دلار)"
+
                         for skey in symbol_keys:
                             scraped_data.append({
                                 "symbol_key": skey,
-                                "title_fa": matched_fa,
+                                "title_fa": display_title,
                                 "price": price_str,
                                 "price_num": price_num,
                                 "change_amount": change_amt,
