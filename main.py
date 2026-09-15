@@ -128,23 +128,16 @@ SYMBOL_MAP = {
     "زغال سنگ": ["coal"],
 
     # شاخص‌های بورس و جهانی (ستون ارزش + تبدیل میلیون و هزار)
-    "شاخص کل": ["bourse_total"],
-    "شاخص کل هم‌وزن": ["bourse_equal"],
-    "شاخص کل هم وزن": ["bourse_equal"],
-    "شاخص فرابورس": ["fara_total"],
+    # توجه: "شاخص کل" دیگر از جدول صفحه اصلی خوانده نمی‌شود، چون آنجا وجود
+    # ندارد؛ به‌صورت اختصاصی از https://www.tgju.org/profile/gc30 گرفته
+    # می‌شود (به تابع fetch_bourse_total_index نگاه کنید).
     "بازار اول فرابورس": ["ifb_market1"],
     "بازار دوم فرابورس": ["ifb_market2"],
     "شاخص بازار اول": ["bourse_market1"],
     "شاخص بازار دوم": ["bourse_market2"],
-    "شاخص ۳۰ شرکت بزرگ": ["bourse_30"],
-    "شاخص ۳۰ شرکت": ["bourse_30"],
-    "شاخص ۵۰ شرکت فعال‌تر": ["bourse_50"],
-    "شاخص قیمت ۵۰ شرکت": ["bourse_p50"],
     "شاخص قیمت هم‌وزن": ["bourse_pequal"],
     "شاخص قیمت وزنی ارزشی": ["bourse_pweighted"],
     "داوجونز": ["dow_jones"],
-    "اس‌اندپی ۵۰۰": ["sp500"],
-    "اس اند پی 500": ["sp500"],
     "نزدک": ["nasdaq"],
     "اس‌ام‌آی سوئیس": ["smi_swiss"],
     "اس ام آی سوئیس": ["smi_swiss"],
@@ -155,12 +148,16 @@ SYMBOL_MAP = {
     "کک فرانسه": ["cac_40"],
     "نیکی ژاپن": ["nikkei_225"],
     "شانگهای چین": ["shanghai_composite"],
-    "آیبکس اسپانیا": ["ibex_35"],
-    "اس‌اندپی کانادا": ["tsx_canada"]
+    "آیبکس اسپانیا": ["ibex_35"]
 }
 
+# این ۷ شاخص از صفحه اصلی tgju.org قابل استخراج نبودند (داده‌شان دیگر آنجا
+# وجود ندارد - عملاً به shakhesban.com منتقل شده) و طبق درخواست کاربر کاملاً
+# از پروژه حذف شدند تا دیگر فراخوانی نشوند: بورس هم‌وزن، شاخص فرابورس،
+# ۳۰ شرکت بزرگ، ۵۰ شرکت فعال‌تر، شاخص قیمت ۵۰ شرکت، اس‌اندپی ۵۰۰، اس‌اندپی کانادا.
+
 COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum", "nickel", "lead", "zinc", "copper", "tin", "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"}
-INDICES = {"bourse_total", "bourse_equal", "fara_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_30", "bourse_50", "bourse_p50", "bourse_pequal", "bourse_pweighted", "dow_jones", "sp500", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35", "tsx_canada"}
+INDICES = {"bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"}
 CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
 
 HEADERS = {
@@ -476,6 +473,97 @@ def scrape_homepage_data():
 
     return list(unique_data.values())
 
+def fetch_bourse_total_index():
+    """
+    استخراج اختصاصی «شاخص کل» بورس از صفحه پروفایل
+    https://www.tgju.org/profile/gc30 که یک جدول اطلاعات لحظه‌ای دارد؛ سلول
+    مقابل عبارت «نرخ فعلی» به‌عنوان price، سلول مقابل «میزان تغییر نسبت به
+    روز گذشته» به‌عنوان change_amount و سلول مقابل «درصد تغییر نسبت به روز
+    گذشته» به‌عنوان change_percent در نظر گرفته می‌شود. چون عبارت‌های دقیق
+    ممکن است کمی با نسخه فعلی سایت فرق داشته باشند، چند حالت مشابه هم بررسی
+    می‌شود.
+    """
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    price_labels = ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای"]
+    amount_labels = ["میزان تغییر نسبت به روز گذشته", "میزان تغییر"]
+    percent_labels = ["درصد تغییر نسبت به روز گذشته", "درصد تغییر"]
+
+    def find_value_for_label(soup, labels):
+        for row in soup.find_all("tr"):
+            cells = row.find_all(["th", "td"])
+            if len(cells) < 2:
+                continue
+            for i, c in enumerate(cells):
+                c_txt = clean_title(get_cell_text(c))
+                if any(lbl in c_txt for lbl in labels):
+                    # مقدار معمولا در سلول بعدی است؛ اگر برچسب آخرین سلول
+                    # بود، سلول قبلی را امتحان می‌کنیم.
+                    if i + 1 < len(cells):
+                        return get_cell_text(cells[i + 1])
+                    elif i - 1 >= 0:
+                        return get_cell_text(cells[i - 1])
+        # راه دوم: بعضی صفحات پروفایل tgju به‌جای جدول از لیست/دیو استفاده
+        # می‌کنند (کلاس‌های info-table). این حالت را هم پوشش می‌دهیم.
+        for item in soup.select("li, div"):
+            spans = item.find_all(["span", "div", "td"], recursive=False)
+            if len(spans) >= 2:
+                label_txt = clean_title(get_cell_text(spans[0]))
+                if any(lbl in label_txt for lbl in labels):
+                    return get_cell_text(spans[1])
+        return None
+
+    try:
+        res = requests.get("https://www.tgju.org/profile/gc30", headers=HEADERS, timeout=15)
+        if res.status_code != 200:
+            return None
+        soup = BeautifulSoup(res.text, "html.parser")
+
+        raw_price = find_value_for_label(soup, price_labels)
+        raw_amount = find_value_for_label(soup, amount_labels)
+        raw_percent = find_value_for_label(soup, percent_labels)
+
+        if raw_price is None:
+            print("هشدار: مقدار «نرخ فعلی» برای شاخص کل (gc30) پیدا نشد؛ ممکن است عبارت سایت عوض شده باشد.", flush=True)
+            return None
+
+        price_str, price_num = parse_price_value(raw_price, is_index=True)
+
+        change_amt = "0"
+        if raw_amount is not None:
+            amt_clean = to_english_digits(raw_amount)
+            amt_match = re.search(r'(-?\d+(?:\.\d+)?)', amt_clean)
+            if amt_match:
+                is_neg = "-" in amt_clean or "کاهش" in raw_amount
+                amt_val = abs(float(amt_match.group(1)))
+                if is_neg:
+                    amt_val = -amt_val
+                change_amt = format_number_with_comma(amt_val)
+
+        change_pct = "0%"
+        if raw_percent is not None:
+            pct_clean = to_english_digits(raw_percent)
+            pct_match = re.search(r'(-?\d+(?:\.\d+)?)', pct_clean)
+            if pct_match:
+                is_neg = "-" in pct_clean or "کاهش" in raw_percent
+                pct_val = abs(float(pct_match.group(1)))
+                if is_neg:
+                    pct_val = -pct_val
+                change_pct = f"{pct_val:.2f}%"
+
+        return {
+            "symbol_key": "bourse_total",
+            "title_fa": "شاخص کل",
+            "price": price_str,
+            "change_amount": change_amt,
+            "change_percent": change_pct,
+            "updated_at": updated_at
+        }
+    except Exception as e:
+        print(f"خطا در استخراج شاخص کل بورس از gc30: {e}", flush=True)
+        return None
+
 def get_db_connection():
     turso_url = os.environ.get("TURSO_DATABASE_URL", "").strip()
     turso_token = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
@@ -530,5 +618,13 @@ def update_database(data_list):
 
 if __name__ == "__main__":
     data = scrape_homepage_data()
+
+    # «شاخص کل» دیگر در صفحه اصلی نیست؛ جداگانه از صفحه اختصاصی‌اش می‌گیریم.
+    bourse_total_item = fetch_bourse_total_index()
+    if bourse_total_item:
+        data.append(bourse_total_item)
+    else:
+        print("توجه: شاخص کل بورس این بار به‌روزرسانی نشد (مقدار قبلی در دیتابیس باقی می‌ماند).", flush=True)
+
     if data:
         update_database(data)
