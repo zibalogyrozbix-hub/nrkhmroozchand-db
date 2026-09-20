@@ -6,6 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 import pytz
 import jdatetime
+from playwright.sync_api import sync_playwright
 
 try:
     import libsql_experimental as libsql
@@ -163,6 +164,47 @@ CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
+
+def fetch_rendered_html(url: str, extra_wait: float = 3.0) -> str | None:
+    """
+    برخلاف requests.get که فقط HTML خام لحظه‌ی اول را می‌گیرد، این تابع با
+    یک مرورگر headless واقعی (Playwright/Chromium) صفحه را کامل بارگذاری
+    و اجرا می‌کند.
+
+    دلیل وجودش: صفحات tgju.org در همان چند صدم ثانیه‌ی اول یک سری عدد
+    «کش‌شده» را در HTML سمت سرور نمایش می‌دهند و بلافاصله بعد از لود، با
+    جاوااسکریپت سمت کاربر (که requests اصلاً اجرایش نمی‌کند) آن اعداد را
+    با مقادیر واقعی و به‌روز جایگزین می‌کنند و رنگشان هم تغییر می‌کند. قبلاً
+    این تابع نبود و مستقیم از requests.get استفاده می‌شد، که همیشه همان
+    عدد کش‌شده‌ی اولیه (نه عدد نهایی) را برمی‌گرداند. الگوی wait زیر
+    (domcontentloaded + منتظرماندن برای محو شدن لایه‌ی بارگذاری + یک مکث
+    اضافه) دقیقاً همان راهکاری است که در app.py (instant price) درست کار
+    می‌کند.
+    """
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(user_agent=HEADERS["User-Agent"])
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+            # اگر صفحه یک لایه‌ی «در حال بارگذاری...» داشته باشد، منتظر محو
+            # شدنش می‌مانیم؛ اگر نبود (خطا داد)، بی‌خیالش می‌شویم و ادامه می‌دهیم.
+            try:
+                loading_el = page.locator("text='در حال بارگذاری...'").first
+                loading_el.wait_for(state="detached", timeout=8000)
+            except Exception:
+                pass
+
+            # مکث اضافه تا جاوااسکریپت صفحه اعداد کش‌شده‌ی اولیه را با
+            # مقادیر واقعی/به‌روز جایگزین کند (همان تاخیر عمدی app.py).
+            page.wait_for_timeout(int(extra_wait * 1000))
+
+            html = page.content()
+            browser.close()
+            return html
+    except Exception as e:
+        print(f"خطا در رندر صفحه با Playwright ({url}): {e}", flush=True)
+        return None
 
 def clean_title(text: str) -> str:
     """حذف کاراکترهای نیم‌فاصله/فاصله اضافه برای مقایسه دقیق عنوان ردیف با کلیدهای SYMBOL_MAP"""
@@ -333,9 +375,9 @@ def scrape_homepage_data():
     updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        res = requests.get("https://www.tgju.org", headers=HEADERS, timeout=15)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, "html.parser")
+        html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0)
+        if html:
+            soup = BeautifulSoup(html, "html.parser")
             
             for table in soup.find_all("table"):
                 price_col_idx, change_col_idx = 1, 2
@@ -515,10 +557,10 @@ def fetch_bourse_total_index():
         return None
 
     try:
-        res = requests.get("https://www.tgju.org/profile/gc30", headers=HEADERS, timeout=15)
-        if res.status_code != 200:
+        html = fetch_rendered_html("https://www.tgju.org/profile/gc30", extra_wait=2.0)
+        if not html:
             return None
-        soup = BeautifulSoup(res.text, "html.parser")
+        soup = BeautifulSoup(html, "html.parser")
 
         raw_price = find_value_for_label(soup, price_labels)
         raw_amount = find_value_for_label(soup, amount_labels)
