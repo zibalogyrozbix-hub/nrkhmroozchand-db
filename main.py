@@ -161,6 +161,44 @@ COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum
 INDICES = {"bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"}
 CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
 
+# ---------------------------------------------------------------------------
+# لایهٔ دفاعی در برابر تغییرات ناگهانی/نامعلوم سایت مرجع
+# ---------------------------------------------------------------------------
+# هر سه باگ واقعی‌ای که تا امروز در این پروژه پیدا و رفع شد (عدد غول‌آسای
+# به‌هم‌چسبیده، نرخ برابری دلار/لیر به‌جای نرخ دلار، و گیر کردن طلای ۱۸ عیار)
+# یک ویژگی مشترک داشتند: مقدار «اشتباه» با مقدار «قبلی و درست» از نظر اندازه
+# (تعداد رقم) خیلی متفاوت بود. این‌جا به‌جای این‌که هر بار منتظر بمانیم کاربر
+# خودش با چشم متوجه یک عدد عجیب در دیتابیس شود، قبل از نوشتن هر مقدار جدید،
+# آن را با آخرین مقدار معتبرِ همان نماد مقایسه می‌کنیم. این کار هیچ درخواست
+# شبکه‌ای اضافه‌ای نمی‌خواهد (فقط یک SELECT روی همان دیتابیسی که داریم بهش
+# وصل می‌شویم) و هیچ ستون/جدولی هم به market_prices اضافه نمی‌کند.
+#
+# اگر تعداد رقم‌های عدد جدید با عدد قبلی بیش از این مقدار فرق کند (یعنی چند
+# مرتبه بزرگ‌تر/کوچک‌تر شده - دقیقاً الگوی هر سه باگ قبلی)، مقدار جدید
+# مشکوک تلقی می‌شود: به‌جای بازنویسی، مقدار قبلی حفظ می‌شود و در گزارش
+# پایانی اجرا فلگ می‌شود تا شما دستی بررسی کنید. نوسان‌های واقعی و حتی
+# شدید بازار (که در ارز/طلا/کریپتوی ایران واقعاً پیش می‌آید) تعداد رقم‌ها را
+# عوض نمی‌کنند، پس این آستانه false-positive روی نوسان طبیعی نمی‌دهد.
+SANITY_DIGIT_DIFF_THRESHOLD = 3
+
+# درصد تغییری که فقط برای اطلاع/گزارش (نه جلوگیری از ثبت) چاپ می‌شود؛ چون
+# جهش‌های درصدی بزرگ ولی هم‌رقم (مثلا نوسان سیاسی ناگهانی دلار) می‌توانند
+# کاملاً واقعی باشند و نباید مسدود شوند.
+SANITY_PERCENT_WARN_THRESHOLD = 50.0
+
+def _to_float(price_str) -> float | None:
+    """یک عدد فرمت‌شدهٔ همین دیتابیس (مثلا '2,313,000') را به float تبدیل
+    می‌کند. برای مقادیر غیرعددی مثل '-' مقدار None برمی‌گرداند."""
+    if not price_str or price_str == "-":
+        return None
+    try:
+        return float(str(price_str).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+def _digit_count(value: float) -> int:
+    return len(str(int(abs(value))))
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -414,6 +452,11 @@ def scrape_homepage_data():
     tehran_tz = pytz.timezone('Asia/Tehran')
     updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
 
+    # برای دو هشدار زودهنگام در پایان تابع (بدون هیچ درخواست شبکه‌ای اضافه؛
+    # فقط همون داده‌ای که داریم روی صفحه پردازش می‌کنیم را جمع می‌کنیم):
+    seen_header_texts = []
+    unrecognized_titles = set()
+
     try:
         html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0)
         if html:
@@ -423,6 +466,12 @@ def scrape_homepage_data():
                 price_col_idx, change_col_idx = 1, 2
                 header_tr = table.find("tr")
                 header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+
+                # برای هشدار اثر انگشت ساختاری، سرستون تمام جدول‌ها را جمع
+                # می‌کنیم (حتی آن‌هایی که پایین‌تر رد می‌شوند)، وگرنه اگر
+                # ساختار سایت آن‌قدر عوض شود که هیچ جدولی از فیلتر
+                # is_real_data_table رد نشود، این هشدار هیچ‌وقت فعال نمی‌شد.
+                seen_header_texts.append(" ".join(get_cell_text(c) for c in header_cells))
 
                 # رد کردن فرم‌های محاسبه‌گر/دراپ‌داون‌ها که جدول قیمت واقعی نیستند
                 if not is_real_data_table(table, header_cells):
@@ -483,6 +532,16 @@ def scrape_homepage_data():
                             (t for t in sorted_targets if clean_title(t) in row_title),
                             None
                         )
+
+                    # اگر این ردیف به هیچ نمادی match نشد ولی خودش هم یکی از
+                    # ردیف‌های "شناخته‌شده و بی‌خطر" (مثل جفت‌ارزها که "/"
+                    # دارند، یا خودِ ردیف سرستون که همیشه طبیعتاً match
+                    # نمی‌شود) نبود، به‌عنوان یک نامزد بالقوهٔ «نماد جدید/تغییر
+                    # نام‌یافته روی سایت» ثبتش می‌کنیم (فقط یک set().add ساده،
+                    # بدون هیچ پردازش یا درخواست اضافه).
+                    if not matched_fa and row is not header_tr and "/" not in row_title and len(row_title) >= 2:
+                        unrecognized_titles.add(row_title)
+
                     if matched_fa:
                         symbol_keys = SYMBOL_MAP[matched_fa]
                         primary_key = symbol_keys[0]
@@ -565,7 +624,35 @@ def scrape_homepage_data():
     for item in unique_data.values():
         item.pop("price_num", None)
 
+    # --- هشدار ۱: اثر انگشت ساختاری صفحه ---
+    # اگر در کل صفحه حتی یکی از کلیدواژه‌های شناخته‌شدهٔ سرستون (که همین
+    # امروز روی سایت دیده شدند) پیدا نشود، این یعنی به احتمال زیاد کل قالب
+    # جدول‌های سایت عوض شده - نه فقط یک نماد. این یک هشدار سطح‌بالا و زودهنگام
+    # است، جدا از فلگ‌های ریزتر داخل update_database.
+    known_header_keywords = ["قیمت زنده", "آخرین قیمت", "قیمت / دلار", "ارزش", "تغییر"]
+    all_headers_text = " ".join(seen_header_texts)
+    if seen_header_texts and not any(kw in all_headers_text for kw in known_header_keywords):
+        print(
+            "🚨 هشدار جدی: هیچ‌کدام از سرستون‌های شناخته‌شده (قیمت زنده/آخرین "
+            "قیمت/ارزش/تغییر) در هیچ جدولی روی صفحه پیدا نشد. به‌احتمال زیاد "
+            "ساختار کلی صفحهٔ اصلی tgju.org تغییر کرده و کل منطق استخراج نیاز "
+            "به بازبینی دارد.",
+            flush=True,
+        )
+
+    # --- هشدار ۲: ردیف‌های ناشناخته (نامزد نماد جدید یا تغییرنام‌یافته) ---
+    if unrecognized_titles:
+        sample = sorted(unrecognized_titles)[:15]
+        print(
+            f"\n💡 {len(unrecognized_titles)} عنوان ردیف در جدول‌های واقعی صفحه دیده "
+            f"شد که به هیچ‌کدام از کلیدهای SYMBOL_MAP فعلی match نشدند (شاید نماد "
+            f"جدیدی باشد که سایت اضافه کرده، یا نام یک نماد موجود کمی تغییر کرده). "
+            f"چند نمونه: {' | '.join(sample)}",
+            flush=True,
+        )
+
     return list(unique_data.values())
+
 
 def fetch_bourse_total_index():
     """
@@ -676,7 +763,7 @@ def get_db_connection():
 def update_database(data_list):
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS market_prices (
             symbol_key TEXT PRIMARY KEY,
@@ -687,8 +774,49 @@ def update_database(data_list):
             updated_at TEXT
         )
     """)
-    
+
+    # یک SELECT سبک روی همون دیتابیسی که داریم بهش وصل می‌شیم (نه یک
+    # درخواست شبکه‌ای جدید) تا بتونیم هر مقدار تازه را قبل از نوشتن با
+    # آخرین مقدار معتبرش مقایسه کنیم.
+    existing_rows = {}
+    try:
+        for row in cursor.execute("SELECT symbol_key, price, updated_at FROM market_prices").fetchall():
+            existing_rows[row[0]] = {"price": row[1], "updated_at": row[2]}
+    except Exception as e:
+        print(f"هشدار: خواندن مقادیر قبلی برای صحت‌سنجی ممکن نشد ({e}) — همه‌چیز بدون مقایسه ثبت می‌شود.", flush=True)
+
+    accepted = []
+    rejected_anomalies = []
+
     for item in data_list:
+        old = existing_rows.get(item["symbol_key"])
+        old_val = _to_float(old["price"]) if old else None
+        new_val = _to_float(item["price"])
+
+        if old_val is not None and new_val is not None and old_val != 0:
+            old_digits, new_digits = _digit_count(old_val), _digit_count(new_val)
+            if abs(old_digits - new_digits) >= SANITY_DIGIT_DIFF_THRESHOLD:
+                # جهش رقمی مشکوک (دقیقاً الگوی باگ‌های قبلی) - مقدار قبلی حفظ می‌شود
+                rejected_anomalies.append({
+                    "symbol_key": item["symbol_key"],
+                    "title_fa": item["title_fa"],
+                    "old_price": old["price"],
+                    "new_price": item["price"],
+                })
+                continue
+
+            percent_change = abs(new_val - old_val) / abs(old_val) * 100
+            if percent_change >= SANITY_PERCENT_WARN_THRESHOLD:
+                print(
+                    f"⚠️ هشدار (فقط اطلاع‌رسانی، ثبت می‌شود): {item['symbol_key']} "
+                    f"({item['title_fa']}) با {percent_change:.0f}% نسبت به مقدار قبلی "
+                    f"({old['price']} -> {item['price']}) تغییر کرده.",
+                    flush=True,
+                )
+
+        accepted.append(item)
+
+    for item in accepted:
         cursor.execute("""
             INSERT INTO market_prices (symbol_key, title_fa, price, change_amount, change_percent, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -705,10 +833,58 @@ def update_database(data_list):
             item["change_percent"],
             item["updated_at"]
         ))
-    
+
     conn.commit()
     conn.close()
-    print(f"تعداد {len(data_list)} شاخص در جدول market_prices بروزرسانی شد.", flush=True)
+
+    print(f"تعداد {len(accepted)} شاخص در جدول market_prices بروزرسانی شد.", flush=True)
+
+    if rejected_anomalies:
+        print(
+            f"\n🚫 {len(rejected_anomalies)} مورد به‌خاطر جهش رقمی مشکوک (تفاوت "
+            f"{SANITY_DIGIT_DIFF_THRESHOLD} رقم یا بیشتر با مقدار قبلی) رد و بررسی نشدند "
+            f"— مقدار قبلی دیتابیس دست‌نخورده ماند:",
+            flush=True,
+        )
+        for a in rejected_anomalies:
+            print(f"   - {a['symbol_key']} ({a['title_fa']}): {a['old_price']} -> {a['new_price']} [رد شد]", flush=True)
+
+    # ---------------------------------------------------------------
+    # گزارش پوشش: کدام نمادهای موردانتظار اصلاً در این اجرا استخراج
+    # نشدند، و کدام‌ها مدتی طولانی است بروزرسانی نشده‌اند (یعنی به
+    # احتمال زیاد الان هم match نمی‌شوند، حتی اگر قبلاً می‌شدند).
+    # ---------------------------------------------------------------
+    expected_roster = {sk for keys in SYMBOL_MAP.values() for sk in keys} | {"bourse_total"}
+    matched_roster = {item["symbol_key"] for item in accepted}
+    missing_this_run = sorted(expected_roster - matched_roster)
+    if missing_this_run:
+        print(
+            f"\n📋 {len(missing_this_run)} نماد در این اجرا اصلاً پیدا/match نشدند "
+            f"(مقدار قبلی‌شان در دیتابیس دست‌نخورده مانده): {', '.join(missing_this_run)}",
+            flush=True,
+        )
+
+    STALE_HOURS = 48
+    try:
+        now = datetime.now(pytz.timezone('Asia/Tehran'))
+        stale = []
+        for symbol_key, row in existing_rows.items():
+            if symbol_key in matched_roster:
+                continue
+            try:
+                last_dt = pytz.timezone('Asia/Tehran').localize(datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S"))
+                hours_old = (now - last_dt).total_seconds() / 3600
+                if hours_old >= STALE_HOURS:
+                    stale.append((symbol_key, round(hours_old)))
+            except (ValueError, TypeError):
+                continue
+        if stale:
+            stale.sort(key=lambda x: -x[1])
+            print(f"\n⏰ این نمادها بیش از {STALE_HOURS} ساعت است بروزرسانی نشده‌اند (به‌احتمال زیاد الگوی match‌شان خراب شده):", flush=True)
+            for symbol_key, hours_old in stale:
+                print(f"   - {symbol_key}: {hours_old} ساعت قدیمی", flush=True)
+    except Exception as e:
+        print(f"هشدار: محاسبهٔ گزارش داده‌های قدیمی ممکن نشد: {e}", flush=True)
 
 if __name__ == "__main__":
     data = scrape_homepage_data()
