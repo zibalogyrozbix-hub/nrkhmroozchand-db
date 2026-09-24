@@ -21,7 +21,7 @@
         body { font-family: 'Vazirmatn', sans-serif; }
     </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col pb-20 lg:pb-0">
 
     <!-- Header -->
     <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
@@ -37,6 +37,49 @@
             </div>
         </div>
     </header>
+
+    <!-- FLOATING SIDE BANNERS (DESKTOP: XL Screens) -->
+    <!-- Right Floating Banner: Prediction Bot -->
+    <aside class="hidden xl:flex fixed right-4 top-1/3 -translate-y-1/2 z-40 w-52 bg-gradient-to-b from-amber-500/20 via-slate-900 to-slate-900 border border-amber-500/40 rounded-2xl p-4 flex-col items-center text-center shadow-2xl backdrop-blur">
+        <div class="bg-amber-500/20 p-2.5 rounded-full mb-3 text-amber-400 animate-bounce">
+            🏆
+        </div>
+        <h3 class="text-xs font-bold text-amber-300 mb-1">ربات پیش‌بینی قیمت</h3>
+        <p class="text-[11px] text-slate-300 font-semibold leading-relaxed mb-4">
+            همین حالا پیش بینی کن و برنده شو!
+        </p>
+        <a id="smart-btn-predict-desktop" href="#" target="_blank" rel="noopener" 
+           class="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-xs py-2 px-3 rounded-xl transition shadow-lg flex items-center justify-center gap-1.5">
+            <span>ورود به ربات</span>
+            <span id="predict-platform-tag-desktop" class="text-[10px] bg-slate-950/20 px-1.5 py-0.5 rounded">...</span>
+        </a>
+        <div class="mt-3 flex gap-2 text-[10px] text-slate-400">
+            <a href="https://ble.ir/pishbini_gheymat_bot" target="_blank" rel="noopener" class="hover:text-amber-400 transition">نسخه بله</a>
+            <span>|</span>
+            <a href="https://t.me/pishbini_gheymat_bot" target="_blank" rel="noopener" class="hover:text-amber-400 transition">نسخه تلگرام</a>
+        </div>
+    </aside>
+
+    <!-- Left Floating Banner: Instant Price Inquiry Bot -->
+    <aside class="hidden xl:flex fixed left-4 top-1/3 -translate-y-1/2 z-40 w-52 bg-gradient-to-b from-emerald-500/20 via-slate-900 to-slate-900 border border-emerald-500/40 rounded-2xl p-4 flex-col items-center text-center shadow-2xl backdrop-blur">
+        <div class="bg-emerald-500/20 p-2.5 rounded-full mb-3 text-emerald-400 animate-pulse">
+            ⚡
+        </div>
+        <h3 class="text-xs font-bold text-emerald-300 mb-1">ربات استعلام نرخ</h3>
+        <p class="text-[11px] text-slate-300 font-semibold leading-relaxed mb-4">
+            استعلام فوری و هوشمند نرخ لحظه‌ای ارز و طلا
+        </p>
+        <a id="smart-btn-price-desktop" href="#" target="_blank" rel="noopener" 
+           class="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-slate-950 font-bold text-xs py-2 px-3 rounded-xl transition shadow-lg flex items-center justify-center gap-1.5">
+            <span>استعلام سریع</span>
+            <span id="price-platform-tag-desktop" class="text-[10px] bg-slate-950/20 px-1.5 py-0.5 rounded">...</span>
+        </a>
+        <div class="mt-3 flex gap-2 text-[10px] text-slate-400">
+            <a href="https://ble.ir/nerkhemroozchand_bot" target="_blank" rel="noopener" class="hover:text-emerald-400 transition">نسخه بله</a>
+            <span>|</span>
+            <a href="https://t.me/nerkhemroozchand_bot" target="_blank" rel="noopener" class="hover:text-emerald-400 transition">نسخه تلگرام</a>
+        </div>
+    </aside>
 
     <!-- Main Container -->
     <main class="max-w-7xl mx-auto px-4 py-8 flex-1 w-full space-y-8">
@@ -81,6 +124,30 @@
             </div>
         </div>
 
+        <!-- Horizontal Channel Banner Below Table -->
+        <section class="bg-gradient-to-r from-amber-500/10 via-slate-900 to-emerald-500/10 border border-amber-500/30 rounded-2xl p-6 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-6">
+            <div class="space-y-2 text-center md:text-right">
+                <div class="inline-flex items-center gap-2 bg-amber-500/10 text-amber-400 text-xs px-3 py-1 rounded-full border border-amber-500/20 font-semibold">
+                    📢 کانال رسمی اطلاع‌رسانی
+                </div>
+                <h2 class="text-xl font-bold text-slate-100">عضویت در کانال «نرخ امروز چند؟»</h2>
+                <p class="text-xs text-slate-400 max-w-xl leading-relaxed">
+                    دریافت لحظه‌ای هشدار نوسانات شدید دلار، طلا و سکه، تحلیل‌های روزانه بازار و گزارش‌های اقتصادی ویژه مستقیم در پیام‌رسان محبوب شما.
+                </p>
+            </div>
+            
+            <div class="flex flex-wrap sm:flex-nowrap gap-3 w-full md:w-auto justify-center">
+                <a href="https://ble.ir/nerkhemroozchand" target="_blank" rel="noopener" 
+                   class="flex-1 sm:flex-initial bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-3 px-5 rounded-xl transition flex items-center justify-center gap-2 shadow-lg">
+                    <span>عضویت در بله</span>
+                </a>
+                <a href="https://t.me/nerkhemroozchand" target="_blank" rel="noopener" 
+                   class="flex-1 sm:flex-initial bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-3 px-5 rounded-xl transition flex items-center justify-center gap-2 shadow-lg">
+                    <span>عضویت در تلگرام</span>
+                </a>
+            </div>
+        </section>
+
         <!-- FAQ Section for SEO & User Guide -->
         <section class="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 space-y-6">
             <h2 class="text-lg font-bold text-amber-400 border-b border-slate-800 pb-3 flex items-center gap-2">
@@ -108,13 +175,87 @@
 
     </main>
 
+    <!-- MOBILE STICKY BOTTOM BAR (Visible on screens < XL) -->
+    <div class="xl:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 border-t border-slate-800 p-3 backdrop-blur flex justify-between items-center gap-2">
+        <a id="smart-btn-predict-mobile" href="#" target="_blank" rel="noopener" 
+           class="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] py-2.5 px-2 rounded-xl text-center shadow transition flex flex-col items-center justify-center">
+            <span>🏆 پیش‌بینی قیمت و جایزه</span>
+            <span id="predict-platform-tag-mobile" class="text-[9px] font-normal opacity-80">(در حال تشخیص...)</span>
+        </a>
+        
+        <a id="smart-btn-price-mobile" href="#" target="_blank" rel="noopener" 
+           class="flex-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] py-2.5 px-2 rounded-xl text-center shadow transition flex flex-col items-center justify-center">
+            <span>⚡ استعلام سریع نرخ‌ها</span>
+            <span id="price-platform-tag-mobile" class="text-[9px] font-normal opacity-80">(در حال تشخیص...)</span>
+        </a>
+    </div>
+
     <!-- Footer -->
     <footer class="border-t border-slate-800 bg-slate-900/40 py-6 text-center text-xs text-slate-500">
         <p>داده‌ها به‌صورت خودکار هر ۲۰ دقیقه بروزرسانی می‌شوند.</p>
     </footer>
 
-    <!-- Script for Live Static Data Fetching -->
+    <!-- Script for Smart Routing & Live Static Data Fetching -->
     <script>
+        // URL Mappings
+        const BOT_LINKS = {
+            predict: {
+                bale: "https://ble.ir/pishbini_gheymat_bot",
+                telegram: "https://t.me/pishbini_gheymat_bot"
+            },
+            price: {
+                bale: "https://ble.ir/nerkhemroozchand_bot",
+                telegram: "https://t.me/nerkhemroozchand_bot"
+            }
+        };
+
+        // Smart Geo / Location Detection Function
+        function isIranLocation() {
+            try {
+                // Check browser timezone
+                const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (timeZone === "Asia/Tehran") {
+                    return true;
+                }
+                // Check browser language preferences
+                if (navigator.languages && navigator.languages.some(lang => lang.toLowerCase().includes("fa-ir"))) {
+                    return true;
+                }
+            } catch (e) {
+                console.warn("Geo detection error:", e);
+            }
+            return false; // Default fallback to Telegram for foreign/VPN users
+        }
+
+        // Apply Smart Routing to Buttons
+        function setupSmartBotLinks() {
+            const inIran = isIranLocation();
+            const platform = inIran ? "bale" : "telegram";
+            const platformTitle = inIran ? "در بله" : "در تلگرام";
+
+            // Desktop Elements
+            const predictBtnDesktop = document.getElementById("smart-btn-predict-desktop");
+            const priceBtnDesktop = document.getElementById("smart-btn-price-desktop");
+            const predictTagDesktop = document.getElementById("predict-platform-tag-desktop");
+            const priceTagDesktop = document.getElementById("price-platform-tag-desktop");
+
+            if (predictBtnDesktop) predictBtnDesktop.href = BOT_LINKS.predict[platform];
+            if (priceBtnDesktop) priceBtnDesktop.href = BOT_LINKS.price[platform];
+            if (predictTagDesktop) predictTagDesktop.innerText = platformTitle;
+            if (priceTagDesktop) priceTagDesktop.innerText = platformTitle;
+
+            // Mobile Elements
+            const predictBtnMobile = document.getElementById("smart-btn-predict-mobile");
+            const priceBtnMobile = document.getElementById("smart-btn-price-mobile");
+            const predictTagMobile = document.getElementById("predict-platform-tag-mobile");
+            const priceTagMobile = document.getElementById("price-platform-tag-mobile");
+
+            if (predictBtnMobile) predictBtnMobile.href = BOT_LINKS.predict[platform];
+            if (priceBtnMobile) priceBtnMobile.href = BOT_LINKS.price[platform];
+            if (predictTagMobile) predictTagMobile.innerText = platformTitle;
+            if (priceTagMobile) priceTagMobile.innerText = platformTitle;
+        }
+
         let allData = [];
 
         async function fetchMarketData() {
@@ -204,7 +345,10 @@
             });
         });
 
-        // Initial Load
+        // Initialize Smart Links
+        setupSmartBotLinks();
+
+        // Initial Data Load
         fetchMarketData();
 
         // Check for updates every 60 seconds automatically
