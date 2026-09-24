@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import sqlite3
 from datetime import datetime
 import requests
@@ -760,6 +761,38 @@ def get_db_connection():
         print("اتصال به SQLite محلی ...", flush=True)
         return sqlite3.connect("market_database.db")
 
+
+def write_data_json(accepted):
+    """ساخت/به‌روزرسانی snapshot استاتیک data.json از داده‌های پذیرفته‌شدهٔ همین اجرا.
+
+    ساختار JSON همان نسخهٔ قبلی Gemini است: یک آرایه از رکوردهای پذیرفته‌شده،
+    مرتب‌شده بر اساس title_fa و با UTF-8 واقعی (ensure_ascii=False).
+    ابتدا فایل موقت نوشته می‌شود و سپس جایگزین data.json می‌شود تا در صورت
+    قطع شدن نوشتن، فایل JSON قبلی ناقص نماند.
+    """
+    json_path = "data.json"
+    temp_path = f"{json_path}.tmp"
+    try:
+        sorted_json_data = sorted(accepted, key=lambda x: x.get("title_fa", ""))
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(sorted_json_data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(temp_path, json_path)
+        print(
+            f"فایل {json_path} با موفقیت ایجاد/بروزرسانی شد "
+            f"({len(sorted_json_data)} رکورد).",
+            flush=True,
+        )
+        return True
+    except Exception as e:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+        print(f"خطا در ایجاد فایل {json_path}: {e}", flush=True)
+        return False
+
 def update_database(data_list):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -838,6 +871,10 @@ def update_database(data_list):
     conn.close()
 
     print(f"تعداد {len(accepted)} شاخص در جدول market_prices بروزرسانی شد.", flush=True)
+
+    # همان قابلیت نسخهٔ Gemini: خروجی کامل همین اجرای موفق/پذیرفته‌شده
+    # را برای مصرف استاتیک سایر بخش‌های پروژه در data.json ذخیره می‌کنیم.
+    write_data_json(accepted)
 
     if rejected_anomalies:
         print(
