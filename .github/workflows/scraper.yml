@@ -2,7 +2,7 @@ name: TGJU Market Data Scraper
 
 on:
   schedule:
-    - cron: '*/20 * * * *'  # اجرای خودکار هر ۱۰ دقیقه
+    - cron: '*/20 * * * *'  # اجرای خودکار هر ۲۰ دقیقه
   workflow_dispatch:        # قابلیت اجرای دستی از تب Actions
 
 jobs:
@@ -30,3 +30,11 @@ jobs:
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
           python main.py
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: 'prices-landing-page'
+          directory: '.'
