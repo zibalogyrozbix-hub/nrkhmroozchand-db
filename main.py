@@ -165,25 +165,33 @@ def scrape_homepage_data():
                     if "ارزش" in t:pidx=i
                     elif any(k in t for k in ["قیمت","قیمت زنده","قیمت (ریال)"]) and pidx==1:pidx=i
                     elif "تغییر" in t:cidx=i
+
                 crypto_usd_idx=find_header_col(headers,["قیمت/دلار","قیمت / دلار","قیمت دلار","قیمت (دلار)","دلار","$"])
+
                 for row in table.find_all("tr"):
                     cols=row.find_all(["td","th"])
                     if len(cols)<2:continue
                     title=clean_title(get_cell_text(cols[0]))
                     match=next((t for t in targets if clean_title(t)==title),None)
-                    if not match and "/" not in title:match=next((t for t in targets if clean_title(t) in title),None)
+                    if not match and "/" not in title:
+                        match=next((t for t in targets if clean_title(t) in title),None)
                     if not match:
                         if row is not htr and "/" not in title and len(title)>=2:unknown.add(title)
                         continue
+
                     keys=SYMBOL_MAP[match]; key=keys[0]
                     price_cell=cols[pidx] if len(cols)>pidx else cols[1]
-                    if key in CRYPTO:price_cell=cols[1]
+
+                    if key in CRYPTO:
+                        price_cell=cols[1]
                     elif key in COMMODITIES:
                         ui=find_header_col(headers,["قیمت/دلار","قیمت ($)","قیمت$","دلار"])
                         if ui!=-1 and ui<len(cols):price_cell=cols[ui]
                         else:
                             for c in cols[1:]:
-                                if "$" in get_cell_text(c) or "دلار" in get_cell_text(c):price_cell=c;break
+                                if "$" in get_cell_text(c) or "دلار" in get_cell_text(c):
+                                    price_cell=c
+                                    break
                     elif key in INDICES:
                         vi=find_header_col(headers,["ارزش"])
                         if vi!=-1 and vi<len(cols):price_cell=cols[vi]
@@ -194,30 +202,84 @@ def scrape_homepage_data():
                                 if txt and txt!="-" and any(ch.isdigit() for ch in txt) and ("ارزش" in ht or "قیمت" in ht or i==pidx):
                                     price_cell=c;found=True;break
                             if not found and len(cols)>pidx:price_cell=cols[pidx]
+
                     price_raw,price_rial=parse_price_value(get_cell_text(price_cell),key in INDICES)
-                    usd=None
+
+                    # فقط قیمت دلاری خود رمزارز برای سایر محاسبات داخلی؛
+                    # در change_amount از نرخ USD استخراج‌شده از symbol_key=usd استفاده می‌شود.
+                    crypto_price_usd=None
                     if key in CRYPTO:
-                        if crypto_usd_idx!=-1 and crypto_usd_idx<len(cols):_,usd=parse_price_value(get_cell_text(cols[crypto_usd_idx]))
-                        if not usd:
+                        if crypto_usd_idx!=-1 and crypto_usd_idx<len(cols):
+                            _,crypto_price_usd=parse_price_value(get_cell_text(cols[crypto_usd_idx]))
+                        if not crypto_price_usd:
                             for i,c in enumerate(cols[2:],2):
                                 if i<len(headers) and ("دلار" in clean_title(get_cell_text(headers[i])) or "$" in get_cell_text(headers[i])):
                                     _,cand=parse_price_value(get_cell_text(c))
-                                    if cand>0:usd=cand;break
-                    if key in TOMAN_PRICE_SYMBOLS:price=format_number_with_comma(price_rial/10)
-                    else:price=price_raw
+                                    if cand>0:
+                                        crypto_price_usd=cand
+                                        break
+
+                    if key in TOMAN_PRICE_SYMBOLS:
+                        price=format_number_with_comma(price_rial/10)
+                    else:
+                        price=price_raw
+
                     change_cell=cols[cidx] if len(cols)>cidx else None
-                    if key in CRYPTO:change_amt,change_pct=calculate_crypto_change_toman(change_cell,price_rial,usd or 0)
-                    else:change_amt,change_pct=parse_changes(change_cell,price_rial/10 if key in TOMAN_PRICE_SYMBOLS else price_rial)
+
+                    if key in CRYPTO:
+                        change_amt,change_pct=parse_changes(change_cell,price_rial)
+
+                        # نرخ دلار به تومان از همان USD استخراج‌شده در همین اجرای تابع
+                        usd_toman=next(
+                            (_to_float(x["price"]) for x in out if x["symbol_key"]=="usd" and x.get("price") not in (None,"-")),
+                            None
+                        )
+
+                        if usd_toman is not None:
+                            raw=to_english_digits(get_cell_text(change_cell) if change_cell else "")
+                            raw=re.sub(r"\([^)]*\)","",raw)
+                            m=re.search(r"[-+]?\d+(?:\.\d+)?",raw)
+
+                            if m:
+                                try:
+                                    change_usd=float(m.group(0))
+                                    if change_usd>0 and is_cell_red(change_cell):
+                                        change_usd=-change_usd
+                                    change_amt=format_number_with_comma(change_usd*usd_toman)
+                                except:
+                                    pass
+                    else:
+                        change_amt,change_pct=parse_changes(
+                            change_cell,
+                            price_rial/10 if key in TOMAN_PRICE_SYMBOLS else price_rial
+                        )
+
                     display=match+(" (دلار)" if key in COMMODITIES and "(دلار)" not in match else "")
+
                     for skey in keys:
-                        out.append({"symbol_key":skey,"title_fa":display,"price":price,"change_amount":change_amt,"change_percent":change_pct,"updated_at":updated_at})
-    except Exception as e:print(f"خطا در استخراج: {e}",flush=True)
+                        out.append({
+                            "symbol_key":skey,
+                            "title_fa":display,
+                            "price":price,
+                            "change_amount":change_amt,
+                            "change_percent":change_pct,
+                            "updated_at":updated_at
+                        })
+
+    except Exception as e:
+        print(f"خطا در استخراج: {e}",flush=True)
+
     unique={}
     for x in out:
-        if x["symbol_key"] not in unique or unique[x["symbol_key"]]["price"]=="-":unique[x["symbol_key"]]=x
+        if x["symbol_key"] not in unique or unique[x["symbol_key"]]["price"]=="-":
+            unique[x["symbol_key"]]=x
+
     if seen and not any(k in " ".join(seen) for k in ["قیمت زنده","آخرین قیمت","قیمت / دلار","ارزش","تغییر"]):
         print("🚨 هشدار جدی: هیچ‌کدام از سرستون‌های شناخته‌شده در هیچ جدولی روی صفحه پیدا نشد.",flush=True)
-    if unknown:print(f"\n💡 {len(unknown)} عنوان ردیف ناشناخته پیدا شد: {' | '.join(sorted(unknown)[:15])}",flush=True)
+
+    if unknown:
+        print(f"\n💡 {len(unknown)} عنوان ردیف ناشناخته پیدا شد: {' | '.join(sorted(unknown)[:15])}",flush=True)
+
     return list(unique.values())
 
 def fetch_bourse_total_index():
