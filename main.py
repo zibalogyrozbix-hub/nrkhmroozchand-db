@@ -590,7 +590,10 @@ def update_database(data_list):
     existing_rows = {}
     conn = None
 
-    # ۱. خواندن مقادیر قبلی دیتابیس جهت صحت‌سنجی نوسانات
+    # ۱. خواندن مقادیر قبلی دیتابیس جهت صحت‌سنجی نوسانات و تکمیل data.json.
+    # نکته مهم: همهٔ ستون‌ها را می‌خوانیم (نه فقط price/updated_at)، چون
+    # پایین‌تر برای ساختن data.json کامل به عنوان فارسی/تغییرات هر نماد هم
+    # نیاز داریم، حتی برای نمادهایی که در همین اجرا match نشده‌اند.
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -606,8 +609,17 @@ def update_database(data_list):
             )
         """)
 
-        for row in cursor.execute("SELECT symbol_key, price, updated_at FROM market_prices").fetchall():
-            existing_rows[row[0]] = {"price": row[1], "updated_at": row[2]}
+        for row in cursor.execute(
+            "SELECT symbol_key, title_fa, price, change_amount, change_percent, updated_at FROM market_prices"
+        ).fetchall():
+            existing_rows[row[0]] = {
+                "symbol_key": row[0],
+                "title_fa": row[1],
+                "price": row[2],
+                "change_amount": row[3],
+                "change_percent": row[4],
+                "updated_at": row[5],
+            }
     except Exception as e:
         print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
 
@@ -640,8 +652,21 @@ def update_database(data_list):
 
         accepted.append(item)
 
-    # ۳. ذخیره‌سازی فوری فایل data.json مستقل از دیتابیس
-    write_data_json(accepted)
+    # ۳. ساخت نسخهٔ کامل داده برای data.json.
+    # نکتهٔ مهم (رفع یک باگ واقعی): قبلاً data.json فقط از روی `accepted`
+    # (یعنی فقط نمادهایی که دقیقاً در همین اجرا match شدند) ساخته می‌شد. اگر
+    # یک نماد در یک اجرا موقتاً match نمی‌شد (یا به‌خاطر جهش رقمی مشکوک رد
+    # می‌شد)، به‌طور کامل از data.json حذف می‌شد - حتی وقتی خودِ Turso هنوز
+    # مقدار معتبر قبلی‌اش را داشت. یعنی کاربر ربات چیزی می‌دید که با
+    # هیچ‌کدام از حالت‌های "قیمت درست" یا "خطای واقعی" هم‌خوانی نداشت: فقط
+    # می‌دید «این نماد پیدا نشد»، انگار که اصلاً وجود ندارد.
+    # با merge کردن existing_rows (مقادیر قبلاً معتبر) با accepted (تازه‌ترین
+    # مقادیر این اجرا)، data.json همیشه دقیقاً همون پوششی رو داره که Turso
+    # داره - نه کمتر، نه بیشتر.
+    complete_snapshot = dict(existing_rows)
+    for item in accepted:
+        complete_snapshot[item["symbol_key"]] = item
+    write_data_json(list(complete_snapshot.values()))
 
     # ۴. آپدیت دیتابیس Turso / SQLite (در صورت بروز خطا، مانع برنامه نمی‌شود)
     if conn:
@@ -684,6 +709,30 @@ def update_database(data_list):
     missing_this_run = sorted(expected_roster - matched_roster)
     if missing_this_run:
         print(f"\n📋 {len(missing_this_run)} نماد در این اجرا پیدا نشدند: {', '.join(missing_this_run)}", flush=True)
+
+    # گزارش داده‌های قدیمی: نمادهایی که مدتی طولانی است اصلاً match نشده‌اند
+    # (نه فقط همین اجرا) - نشانهٔ یک الگوی match خراب که خودش را تکرار می‌کند.
+    STALE_HOURS = 48
+    try:
+        now = datetime.now(pytz.timezone('Asia/Tehran'))
+        stale = []
+        for symbol_key, row in existing_rows.items():
+            if symbol_key in matched_roster:
+                continue
+            try:
+                last_dt = pytz.timezone('Asia/Tehran').localize(datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S"))
+                hours_old = (now - last_dt).total_seconds() / 3600
+                if hours_old >= STALE_HOURS:
+                    stale.append((symbol_key, round(hours_old)))
+            except (ValueError, TypeError):
+                continue
+        if stale:
+            stale.sort(key=lambda x: -x[1])
+            print(f"\n⏰ این نمادها بیش از {STALE_HOURS} ساعت است بروزرسانی نشده‌اند (به‌احتمال زیاد الگوی match‌شان خراب شده):", flush=True)
+            for symbol_key, hours_old in stale:
+                print(f"   - {symbol_key}: {hours_old} ساعت قدیمی", flush=True)
+    except Exception as e:
+        print(f"هشدار: محاسبهٔ گزارش داده‌های قدیمی ممکن نشد: {e}", flush=True)
 
 if __name__ == "__main__":
     try:
