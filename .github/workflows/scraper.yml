@@ -45,7 +45,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -f "public/data.json" ]; then
-            npx wrangler pages deploy public --project-name=prices-landing-page --branch=main
+            npx wrangler pages deploy public --project-name=nerkhemroozchand --branch=main
           else
             echo "خطا: فایل public/data.json یافت نشد. دیپلوی انجام نمی‌شود."
             exit 1
