@@ -175,6 +175,29 @@ TOMAN_SYMBOLS = {
     "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"
 }
 
+# دسته‌بندی واحد شمارش شاخص‌ها
+USD_UNIT_SYMBOLS = {
+    "gold_ounce", "silver_ounce", "platinum_ounce", "palladium_ounce",
+    "cotton", "sugar", "soybeans", "wheat", "corn", "rice",
+    "aluminum", "nickel", "lead", "zinc", "copper", "tin",
+    "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"
+}
+
+UNIT_INDEX_SYMBOLS = {
+    "bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2",
+    "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss",
+    "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"
+}
+
+def get_unit(symbol_key: str) -> str:
+    if symbol_key in TOMAN_SYMBOLS:
+        return "تومان"
+    elif symbol_key in USD_UNIT_SYMBOLS:
+        return "دلار"
+    elif symbol_key in UNIT_INDEX_SYMBOLS:
+        return "واحد"
+    return ""
+
 SANITY_DIGIT_DIFF_THRESHOLD = 3
 SANITY_PERCENT_WARN_THRESHOLD = 50.0
 
@@ -463,6 +486,7 @@ def scrape_homepage_data():
                                 "symbol_key": skey,
                                 "title_fa": display_title,
                                 "price": price_str,
+                                "unit": get_unit(skey),
                                 "price_num": price_num,
                                 "change_amount": change_amt,
                                 "change_percent": change_pct,
@@ -582,6 +606,7 @@ def fetch_bourse_total_index():
             "symbol_key": "bourse_total",
             "title_fa": "شاخص کل",
             "price": price_str,
+            "unit": get_unit("bourse_total"),
             "change_amount": change_amt,
             "change_percent": change_pct,
             "updated_at": updated_at
@@ -643,22 +668,30 @@ def update_database(data_list):
                 symbol_key TEXT PRIMARY KEY,
                 title_fa TEXT,
                 price TEXT,
+                unit TEXT,
                 change_amount TEXT,
                 change_percent TEXT,
                 updated_at TEXT
             )
         """)
 
+        # در صورتی که جدول قبلاً بدون ستون unit ساخته شده باشد، ستون را اضافه می‌کند
+        try:
+            cursor.execute("ALTER TABLE market_prices ADD COLUMN unit TEXT")
+        except Exception:
+            pass
+
         for row in cursor.execute(
-            "SELECT symbol_key, title_fa, price, change_amount, change_percent, updated_at FROM market_prices"
+            "SELECT symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at FROM market_prices"
         ).fetchall():
             existing_rows[row[0]] = {
                 "symbol_key": row[0],
                 "title_fa": row[1],
                 "price": row[2],
-                "change_amount": row[3],
-                "change_percent": row[4],
-                "updated_at": row[5],
+                "unit": row[3],
+                "change_amount": row[4],
+                "change_percent": row[5],
+                "updated_at": row[6],
             }
     except Exception as e:
         print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
@@ -700,10 +733,12 @@ def update_database(data_list):
         try:
             for item in accepted:
                 cursor.execute("""
-                    INSERT INTO market_prices (symbol_key, title_fa, price, change_amount, change_percent, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO market_prices (symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(symbol_key) DO UPDATE SET
+                        title_fa = excluded.title_fa,
                         price = excluded.price,
+                        unit = excluded.unit,
                         change_amount = excluded.change_amount,
                         change_percent = excluded.change_percent,
                         updated_at = excluded.updated_at
@@ -711,6 +746,7 @@ def update_database(data_list):
                     item["symbol_key"],
                     item["title_fa"],
                     item["price"],
+                    item["unit"],
                     item["change_amount"],
                     item["change_percent"],
                     item["updated_at"]
