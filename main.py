@@ -250,6 +250,8 @@ def format_number_with_comma(val) -> str:
         return "-"
     if isinstance(val, int) or (isinstance(val, float) and val.is_integer()):
         return f"{int(val):,}"
+    if 0 < abs(val) < 0.01:
+        return f"{val:,.6f}".rstrip('0').rstrip('.')
     return f"{val:,.2f}".rstrip('0').rstrip('.')
 
 def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float]:
@@ -295,9 +297,9 @@ def is_cell_red(cell_tag) -> bool:
             return True
     return False
 
-def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
+def parse_changes(change_cell, price_val: float) -> tuple[str, str, float]:
     if not change_cell:
-        return "0", "0%"
+        return "0", "0%", 0.0
     
     raw_text = get_cell_text(change_cell)
     clean_text = to_english_digits(raw_text)
@@ -323,6 +325,8 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
         pct_val = 0.0
         amt_val = 0.0
 
+    signed_amt = -amt_val if is_red else amt_val
+
     if is_red:
         amt_str = f"-{format_number_with_comma(amt_val)}" if amt_val != 0 else "0"
         pct_str = f"-{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
@@ -330,7 +334,7 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str]:
         amt_str = format_number_with_comma(amt_val)
         pct_str = f"{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
 
-    return amt_str, pct_str
+    return amt_str, pct_str, signed_amt
 
 def find_header_col(header_cells, target_patterns) -> int:
     for idx, c in enumerate(header_cells):
@@ -443,7 +447,7 @@ def scrape_homepage_data():
                         price_str, price_num = parse_price_value(get_cell_text(price_cell), is_index=(primary_key in INDICES))
                         
                         change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
-                        change_amt, change_pct = parse_changes(change_cell, price_num)
+                        change_amt, change_pct, change_num = parse_changes(change_cell, price_num)
 
                         # تبدیل قیمت از ریال به تومان برای نمادهای مشخص‌شده
                         if primary_key in TOMAN_SYMBOLS and price_num:
@@ -462,6 +466,7 @@ def scrape_homepage_data():
                                 "price_num": price_num,
                                 "change_amount": change_amt,
                                 "change_percent": change_pct,
+                                "change_num": change_num,
                                 "updated_at": updated_at
                             })
     except Exception as e:
@@ -473,8 +478,21 @@ def scrape_homepage_data():
         if key not in unique_data or unique_data[key]["price"] == "-":
             unique_data[key] = item
 
+    # ضرب مقدار تغییرات رمزارزها در نرخ تومانی دلار
+    usd_item = unique_data.get("usd")
+    usd_price_toman = _to_float(usd_item["price"]) if usd_item else None
+
+    if usd_price_toman and usd_price_toman > 0:
+        for item in unique_data.values():
+            if item["symbol_key"] in CRYPTO:
+                raw_change = item.get("change_num", 0.0)
+                if raw_change != 0:
+                    toman_change = raw_change * usd_price_toman
+                    item["change_amount"] = format_number_with_comma(toman_change)
+
     for item in unique_data.values():
         item.pop("price_num", None)
+        item.pop("change_num", None)
 
     known_header_keywords = ["قیمت زنده", "آخرین قیمت", "قیمت / دلار", "ارزش", "تغییر"]
     all_headers_text = " ".join(seen_header_texts)
