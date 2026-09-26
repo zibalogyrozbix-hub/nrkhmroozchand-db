@@ -478,8 +478,6 @@ def scrape_homepage_data():
                             price_str = format_number_with_comma(price_num)
 
                         display_title = matched_fa
-                        if primary_key in COMMODITIES and "(دلار)" not in display_title:
-                            display_title = f"{display_title} (دلار)"
 
                         for skey in symbol_keys:
                             scraped_data.append({
