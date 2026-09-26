@@ -286,15 +286,20 @@
         }
 
         function getCategory(key) {
-            const cryptoKeys = ["btc","eth","usdt","trx","ada","sol","doge","shib","ton","xrp","ltc","bch","dot","avax","xlm","dash","bnb"];
-            const bourseKeys = ["bourse_total","ifb_market1","ifb_market2","bourse_market1","bourse_market2","dow_jones","nasdaq","smi_swiss","nifty_50","ftse_100","dax","cac_40","nikkei_225","shanghai_composite","ibex_35"];
-            const goldKeys = ["coin_emami","coin_azadi","coin_half","coin_quarter","coin_gram","gold_18k","gold_24k","gold_used","gold_mesghal","gold_ounce","silver_gram","abshedeh_cash","abshedeh_trade"];
+             const cryptoKeys = ["btc","eth","usdt","trx","ada","sol","doge","shib","ton","xrp","ltc","bch","dot","avax","xlm","dash","bnb"];
+             const bourseKeys = ["bourse_total","ifb_market1","ifb_market2","bourse_market1","bourse_market2","dow_jones","nasdaq","smi_swiss","nifty_50","ftse_100","dax","cac_40","nikkei_225","shanghai_composite","ibex_35"];
+             const goldKeys = ["coin_emami","coin_azadi","coin_half","coin_quarter","coin_gram","gold_18k","gold_24k","gold_used","gold_mesghal","gold_ounce","silver_gram","abshedeh_cash","abshedeh_trade"];
+    
+             // کلیدهای کالاهای اساسی، فلزات پایه و انرژی
+             const commodityKeys = ["oil_brent", "oil_wti", "oil_opec", "natural_gas", "gasoline", "aluminum", "copper", "zinc", "wheat", "rice", "corn"];
 
-            if (cryptoKeys.includes(key)) return "crypto";
-            if (bourseKeys.includes(key)) return "bourse";
-            if (goldKeys.includes(key) || key.includes("bubble_") || key.includes("fund_")) return "gold";
-            return "currency";
-        }
+             if (cryptoKeys.includes(key)) return "crypto";
+             if (bourseKeys.includes(key)) return "bourse";
+             if (goldKeys.includes(key) || key.includes("bubble_") || key.includes("fund_")) return "gold";
+             if (commodityKeys.includes(key)) return "commodity"; // یا "bourse" اگر تب جداگانه نمی‌خواهید
+    
+             return "currency";
+}
 
         function renderTable(data) {
             const tbody = document.getElementById("prices-table-body");
