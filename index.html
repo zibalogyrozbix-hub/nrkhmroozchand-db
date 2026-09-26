@@ -97,14 +97,15 @@
                        class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-amber-500 transition text-slate-200 placeholder-slate-500">
             </div>
 
-            <!-- Categories -->
+           <!-- Categories -->
             <div class="flex flex-wrap gap-2 w-full md:w-auto" id="category-filters">
-                <button data-cat="all" class="cat-btn active bg-amber-500 text-slate-950 font-medium text-xs px-4 py-2 rounded-lg transition">همه</button>
-                <button data-cat="gold" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">طلا و سکه</button>
-                <button data-cat="currency" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">ارزها</button>
-                <button data-cat="crypto" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">کریپتو</button>
-                <button data-cat="bourse" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">بورس و شاخص‌ها</button>
-            </div>
+            <button data-cat="all" class="cat-btn active bg-amber-500 text-slate-950 font-medium text-xs px-4 py-2 rounded-lg transition">همه</button>
+            <button data-cat="gold" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">طلا و سکه</button>
+            <button data-cat="currency" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">ارزها</button>
+            <button data-cat="crypto" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">کریپتو</button>
+            <button data-cat="bourse" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">بورس و شاخص‌ها</button>
+            <button data-cat="commodity" class="cat-btn bg-slate-900 border border-slate-800 hover:border-amber-500 text-xs px-4 py-2 rounded-lg transition">کالا و انرژی</button>
+           </div>
         </div>
 
         <!-- Prices Table / Grid -->
@@ -285,20 +286,49 @@
             }
         }
 
-        function getCategory(key) {
-             const cryptoKeys = ["btc","eth","usdt","trx","ada","sol","doge","shib","ton","xrp","ltc","bch","dot","avax","xlm","dash","bnb"];
-             const bourseKeys = ["bourse_total","ifb_market1","ifb_market2","bourse_market1","bourse_market2","dow_jones","nasdaq","smi_swiss","nifty_50","ftse_100","dax","cac_40","nikkei_225","shanghai_composite","ibex_35"];
-             const goldKeys = ["coin_emami","coin_azadi","coin_half","coin_quarter","coin_gram","gold_18k","gold_24k","gold_used","gold_mesghal","gold_ounce","silver_gram","abshedeh_cash","abshedeh_trade"];
-    
-             // کلیدهای کالاهای اساسی، فلزات پایه و انرژی
-             const commodityKeys = ["oil_brent", "oil_wti", "oil_opec", "natural_gas", "gasoline", "aluminum", "copper", "zinc", "wheat", "rice", "corn"];
+function getCategory(key) {
+    // ۱. ارزهای خارجی
+    const currencyKeys = [
+        "usd", "eur", "gbp", "aed", "try", "cad", "aud", "sar", "iqd", "afn", 
+        "cny", "chf", "sek", "nok", "dkk", "jpy", "inr", "pkr", "rub", "myr", 
+        "thb", "amd", "gel", "azn", "kwd", "omr", "bhd", "qdr", "sgd", "nzd", "hkd"
+    ];
 
-             if (cryptoKeys.includes(key)) return "crypto";
-             if (bourseKeys.includes(key)) return "bourse";
-             if (goldKeys.includes(key) || key.includes("bubble_") || key.includes("fund_")) return "gold";
-             if (commodityKeys.includes(key)) return "commodity"; // یا "bourse" اگر تب جداگانه نمی‌خواهید
-    
-             return "currency";
+    // ۲. طلا، سکه و صندوق‌های طلا
+    const goldKeys = [
+        "coin_emami", "coin_azadi", "coin_half", "coin_quarter", "coin_gram", 
+        "gold_18k", "gold_24k", "gold_used", "gold_mesghal", "gold_ounce", 
+        "silver_gram", "abshedeh_cash", "abshedeh_trade", "silver_ounce", 
+        "platinum_ounce", "palladium_ounce"
+    ];
+
+    // ۳. ارزهای دیجیتال (کریپتو)
+    const cryptoKeys = [
+        "btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", 
+        "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb", "link", "uni"
+    ];
+
+    // ۴. بورس و شاخص‌های جهانی/داخلی
+    const bourseKeys = [
+        "bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", 
+        "dow_jones", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", 
+        "nikkei_225", "shanghai_composite", "ibex_35", "sp500"
+    ];
+
+    // ۵. کالاها، فلزات پایه و انرژی (کومودیتی)
+    const commodityKeys = [
+        "oil_brent", "oil_wti", "oil_opec", "natural_gas", "gasoline", 
+        "aluminum", "copper", "zinc", "wheat", "rice", "corn", "soybean", "iron_ore"
+    ];
+
+    // بررسی تطابق کلیدها
+    if (goldKeys.includes(key) || key.includes("bubble_") || key.includes("fund_")) return "gold";
+    if (currencyKeys.includes(key)) return "currency";
+    if (cryptoKeys.includes(key)) return "crypto";
+    if (bourseKeys.includes(key)) return "bourse";
+    if (commodityKeys.includes(key)) return "commodity";
+
+    return "other"; // برای سایر موارد احتمالی
 }
 
         function renderTable(data) {
