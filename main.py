@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import logging
 import sqlite3
 from datetime import datetime
 import requests
@@ -9,9 +8,6 @@ from bs4 import BeautifulSoup
 import pytz
 import jdatetime
 from playwright.sync_api import sync_playwright
-
-# تنظیمات Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 try:
     import libsql_experimental as libsql
@@ -33,7 +29,6 @@ SYMBOL_MAP = {
     "مثقال طلا": ["gold_mesghal"],
     "انس طلا": ["gold_ounce"],
     "گرم نقره ۹۹۹": ["silver_gram"],
-    "نقره ۹۹۹": ["silver_gram"],
     "آبشده نقدی": ["abshedeh_cash"],
     "آبشده معاملاتی": ["abshedeh_trade"],
     "انس نقره": ["silver_ounce"],
@@ -135,8 +130,6 @@ SYMBOL_MAP = {
     "زغال سنگ": ["coal"],
 
     # شاخص‌های بورس و جهانی
-    "شاخص بورس": ["bourse_total"],
-    "شاخص کل": ["bourse_total"],
     "بازار اول فرابورس": ["ifb_market1"],
     "بازار دوم فرابورس": ["ifb_market2"],
     "شاخص بازار اول": ["bourse_market1"],
@@ -157,37 +150,32 @@ SYMBOL_MAP = {
     "آیبکس اسپانیا": ["ibex_35"]
 }
 
-# اطلاعات لایه حفاظتی اختصاصی برای نمادهای کلیدی (Row ID & Profile URL)
-TARGET_ASSETS_PROFILE = {
-    "usd": {"row_id": "price_dollar_rl", "profile_url": "https://www.tgju.org/profile/price_dollar_rl"},
-    "eur": {"row_id": "price_eur", "profile_url": "https://www.tgju.org/profile/price_eur"},
-    "gold_18k": {"row_id": "geram18", "profile_url": "https://www.tgju.org/profile/geram18"},
-    "coin_emami": {"row_id": "sekee", "profile_url": "https://www.tgju.org/profile/sekee"},
-    "silver_gram": {"row_id": "silver_999", "profile_url": "https://www.tgju.org/profile/silver_999"},
-    "btc": {"row_id": "crypto-bitcoin", "profile_url": "https://www.tgju.org/profile/crypto-bitcoin"},
-    "bourse_total": {"row_id": "gc30", "profile_url": "https://www.tgju.org/profile/gc30"}
-}
-
 COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum", "nickel", "lead", "zinc", "copper", "tin", "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"}
 INDICES = {"bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"}
 CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
 
 # نمادهایی که قیمت آن‌ها از ریال به تومان (تقسیم بر ۱۰) تبدیل می‌شود
 TOMAN_SYMBOLS = {
+    # طلا، سکه و صندوق‌ها
     "coin_emami", "coin_azadi", "coin_half", "coin_quarter", "coin_gram",
     "gold_18k", "gold_24k", "gold_used", "gold_mesghal", "silver_gram",
     "abshedeh_cash", "abshedeh_trade", "mesghal_no_bubble", "bubble_emami",
     "bubble_azadi", "bubble_half", "bubble_quarter", "bubble_gram",
     "fund_ayar", "fund_lotus", "fund_gohar", "fund_mesghal", "fund_kahreba",
     "fund_nab", "fund_riton", "fund_tabesh", "fund_zarvan",
+
+    # ارزهای سنتی
     "usd", "eur", "aed", "gbp", "try", "chf", "cny", "jpy", "krw", "cad",
     "aud", "afn", "amd", "azn", "bhd", "dkk", "gel", "hkd", "inr", "iqd",
     "kgs", "kwd", "myr", "nok", "nzd", "omr", "pkr", "qar", "rub", "sar",
     "sek", "sgd", "syp", "thb", "tjs", "tmt",
+
+    # ارزهای دیجیتال
     "btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton",
     "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"
 }
 
+# دسته‌بندی واحد شمارش شاخص‌ها
 USD_UNIT_SYMBOLS = {
     "gold_ounce", "silver_ounce", "platinum_ounce", "palladium_ounce",
     "cotton", "sugar", "soybeans", "wheat", "corn", "rice",
@@ -201,13 +189,6 @@ UNIT_INDEX_SYMBOLS = {
     "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"
 }
 
-SANITY_DIGIT_DIFF_THRESHOLD = 3
-SANITY_MAX_DEVIATION_PCT = 8.0  # حد مجاز نوسان شدیدی که لایه ۲ (پروفایل) را فعال می‌کند
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
 def get_unit(symbol_key: str) -> str:
     if symbol_key in TOMAN_SYMBOLS:
         return "تومان"
@@ -216,6 +197,32 @@ def get_unit(symbol_key: str) -> str:
     elif symbol_key in UNIT_INDEX_SYMBOLS:
         return "واحد"
     return ""
+
+# نمادهای ارز آزاد ایران (برای محدودسازی جدول‌گزینی؛ پایین‌تر در
+# scrape_homepage_data توضیح داده شده - همان مجموعه ارزهای سنتی داخل
+# TOMAN_SYMBOLS، بدون طلا/سکه/رمزارز/صندوق‌ها)
+FREE_MARKET_CURRENCY_KEYS = {
+    "usd", "eur", "aed", "gbp", "try", "chf", "cny", "jpy", "krw", "cad",
+    "aud", "afn", "amd", "azn", "bhd", "dkk", "gel", "hkd", "inr", "iqd",
+    "kgs", "kwd", "myr", "nok", "nzd", "omr", "pkr", "qar", "rub", "sar",
+    "sek", "sgd", "syp", "thb", "tjs", "tmt",
+}
+
+# نمادهای پرریسک که برای آن‌ها یک صفحه اختصاصی مجزا وجود دارد؛ اگر عدد
+# استخراج‌شده از صفحه اصلی خیلی با آخرین مقدار معتبر فرق کند، به‌عنوان لایه
+# دوم صحت‌سنجی، این صفحه به‌طور مستقل چک می‌شود (به update_database نگاه کنید).
+PROFILE_FALLBACK_URLS = {
+    "usd": "https://www.tgju.org/profile/price_dollar_rl",
+    "eur": "https://www.tgju.org/profile/price_eur",
+    "gold_18k": "https://www.tgju.org/profile/geram18",
+    "coin_emami": "https://www.tgju.org/profile/sekee",
+    "silver_gram": "https://www.tgju.org/profile/silver_999",
+    "btc": "https://www.tgju.org/profile/crypto-bitcoin",
+}
+PROFILE_FALLBACK_PERCENT_THRESHOLD = 7.0
+
+SANITY_DIGIT_DIFF_THRESHOLD = 3
+SANITY_PERCENT_WARN_THRESHOLD = 50.0
 
 def _to_float(price_str) -> float | None:
     if not price_str or price_str == "-":
@@ -228,28 +235,45 @@ def _to_float(price_str) -> float | None:
 def _digit_count(value: float) -> int:
     return len(str(int(abs(value))))
 
-def clean_number(text_val):
-    """پاکسازی رشته، تبدیل اعداد فارسی/عربی و تبدیل به عدد صحیح یا اعشاری"""
-    if not text_val:
-        return None
-    trans_table = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
-    text_val = text_val.translate(trans_table)
-    cleaned = re.sub(r'[^\d.]', '', text_val.replace(',', ''))
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+def fetch_rendered_html(url: str, extra_wait: float = 3.0) -> str | None:
     try:
-        return float(cleaned) if '.' in cleaned else int(cleaned)
-    except ValueError:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(user_agent=HEADERS["User-Agent"])
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+            try:
+                loading_el = page.locator("text='در حال بارگذاری...'").first
+                loading_el.wait_for(state="detached", timeout=8000)
+            except Exception:
+                pass
+
+            page.wait_for_timeout(int(extra_wait * 1000))
+            html = page.content()
+            browser.close()
+            return html
+    except Exception as e:
+        print(f"خطا در رندر صفحه با Playwright ({url}): {e}", flush=True)
         return None
+
+_TITLE_DIGIT_TRANSLATION = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹" + "٠١٢٣٤٥٦٧٨٩",
+    "0123456789" + "0123456789",
+)
 
 def clean_title(text: str) -> str:
     if not text:
         return ""
     text = text.replace('\u200c', ' ').replace('\u200f', '')
     text = text.replace('ي', 'ی').replace('ك', 'ک')
-    translation = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-    text = text.translate(translation)
+    text = text.translate(_TITLE_DIGIT_TRANSLATION)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
-
+    
 def get_cell_text(tag) -> str:
     if tag is None:
         return ""
@@ -286,7 +310,10 @@ def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float
         return "-", 0.0
 
     num_str = match.group(1)
-    val = float(num_str) if "." in num_str else int(num_str)
+    if "." not in num_str:
+        val = int(num_str)
+    else:
+        val = float(num_str)
     
     if is_index or "میلیون" in raw_text or "میلیون" in clean_text:
         if "میلیون" in raw_text:
@@ -294,7 +321,7 @@ def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float
     elif "هزار" in raw_text:
         val = val * 1_000
 
-    return format_number_with_comma(val), float(val)
+    return format_number_with_comma(val), val
 
 def is_cell_red(cell_tag) -> bool:
     if not cell_tag:
@@ -355,41 +382,6 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str, float]:
 
     return amt_str, pct_str, signed_amt
 
-def fetch_rendered_html(url: str, extra_wait: float = 3.0) -> str | None:
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page(user_agent=HEADERS["User-Agent"])
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-
-            try:
-                loading_el = page.locator("text='در حال بارگذاری...'").first
-                loading_el.wait_for(state="detached", timeout=8000)
-            except Exception:
-                pass
-
-            page.wait_for_timeout(int(extra_wait * 1000))
-            html = page.content()
-            browser.close()
-            return html
-    except Exception as e:
-        logging.error(f"خطا در رندر صفحه با Playwright ({url}): {e}")
-        return None
-
-def fetch_price_from_profile(profile_url: str) -> float | None:
-    """لایه ۲: دریافت مستقیم قیمت از صفحه اختصاصی نماد با requests"""
-    try:
-        response = requests.get(profile_url, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            price_box = soup.find('span', {'class': 'value'}) or soup.find(string=re.compile(r'نرخ فعلی|آخرین قیمت'))
-            if price_box:
-                target_element = price_box.parent if price_box.name != 'span' else price_box
-                return clean_number(target_element.text)
-    except Exception as e:
-        logging.error(f"خطا در دریافت قیمت از صفحه اختصاصی {profile_url}: {e}")
-    return None
-
 def find_header_col(header_cells, target_patterns) -> int:
     for idx, c in enumerate(header_cells):
         h_norm = get_cell_text(c).replace(" ", "").replace("\u200c", "")
@@ -401,31 +393,14 @@ def find_header_col(header_cells, target_patterns) -> int:
 def is_real_data_table(table, header_cells) -> bool:
     if table.find(["input", "select", "button"]) is not None:
         return False
+
     header_text = " ".join(get_cell_text(c) for c in header_cells)
     has_price_col = any(k in header_text for k in ["قیمت زنده", "قیمت", "ارزش"])
     has_change_col = "تغییر" in header_text
     return has_price_col and has_change_col
 
-def get_last_known_prices() -> dict:
-    """دریافت آخرین قیمت‌های ثبت‌شده در دیتابیس یا فایل data.json جهت سنجش نوسان و Fallback"""
-    last_prices = {}
-    if os.path.exists("data.json"):
-        try:
-            with open("data.json", "r", encoding="utf-8") as f:
-                items = json.load(f)
-                for item in items:
-                    val = _to_float(item.get("price"))
-                    if val is not None:
-                        last_prices[item["symbol_key"]] = val
-        except Exception as e:
-            logging.warning(f"عدم امکان خواندن data.json: {e}")
-    return last_prices
-
-def scrape_homepage_data(last_known_prices: dict = None):
-    logging.info("در حال دریافت داده‌ها از tgju.org ...")
-    if last_known_prices is None:
-        last_known_prices = get_last_known_prices()
-
+def scrape_homepage_data():
+    print("در حال دریافت داده‌ها از tgju.org ...", flush=True)
     scraped_data = []
     sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
     tehran_tz = pytz.timezone('Asia/Tehran')
@@ -438,11 +413,42 @@ def scrape_homepage_data(last_known_prices: dict = None):
         html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0)
         if html:
             soup = BeautifulSoup(html, "html.parser")
-            
+
+            # --- ریشهٔ اصلی باگ «دلار = 85,840 به‌جای 233,500» ---
+            # صفحه اصلی tgju.org یک ویجت تب‌دار «نرخ ارز آزاد» دارد که علاوه بر
+            # جدول ایران، جدول مشابهی هم برای کشورهای دیگر (افغانستان، ترکیه،
+            # عراق، امارات، قطر، آذربایجان، ارمنستان، تاجیکستان، ترکمنستان،
+            # عربستان، عمان) دارد - و در هر کدام از این جدول‌های کشورهای دیگر هم
+            # یک ردیف دقیقاً با عنوان «دلار» وجود دارد (نرخ دلار به پول محلی آن
+            # کشور)! چون این تب‌ها همگی در HTML واقعی صفحه حاضرند (فقط با CSS
+            # مخفی می‌شوند، نه واقعاً حذف)، BeautifulSoup همهٔ آن‌ها را می‌بیند.
+            # کد قدیمی هر جدولی را که یک ردیف «دلار» معتبر داشت قبول می‌کرد - و
+            # هر کدام که زودتر در HTML ظاهر می‌شد برنده بود، حالا چه جدول واقعی
+            # ایران باشد چه یکی از جدول‌های کشورهای دیگر.
+            # راه‌حل: با استفاده از id مستندشدهٔ خود سایت برای تب ایران
+            # («currency-overview-content»)، ردیف‌های ارز آزاد را فقط داخل همین
+            # کانتینر جست‌وجو می‌کنیم. اگر این id به هر دلیلی (مثلا تغییر بعدی
+            # سایت) پیدا نشود، به‌جای اینکه همه ارزها را از کار بیندازیم، فقط
+            # هشدار می‌دهیم و به رفتار قبلی (بدون محدودیت) برمی‌گردیم - یعنی این
+            # اصلاح هرگز نمی‌تواند وضعیت را بدتر از قبل کند.
+            currency_container = soup.find(id="currency-overview-content")
+            if currency_container is not None:
+                currency_tables = set(currency_container.find_all("table"))
+            else:
+                currency_tables = None
+                print(
+                    "⚠️ هشدار: کانتینر «currency-overview-content» (جدول ارز آزاد ایران) "
+                    "پیدا نشد؛ محدودسازی ضدتداخل ارزها غیرفعال است و ممکن است دوباره خطر "
+                    "قاطی‌شدن با جدول‌های ارز کشورهای دیگر وجود داشته باشد - لطفاً ساختار "
+                    "فعلی صفحه را دستی بررسی کنید.",
+                    flush=True,
+                )
+
             for table in soup.find_all("table"):
                 price_col_idx, change_col_idx = 1, 2
                 header_tr = table.find("tr")
                 header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+
                 seen_header_texts.append(" ".join(get_cell_text(c) for c in header_cells))
 
                 if not is_real_data_table(table, header_cells):
@@ -465,12 +471,34 @@ def scrape_homepage_data(last_known_prices: dict = None):
                         continue
 
                     row_title = clean_title(get_cell_text(cols[0]))
-                    matched_fa = next((t for t in sorted_targets if clean_title(t) == row_title), None)
+
+                    matched_fa = next(
+                        (t for t in sorted_targets if clean_title(t) == row_title),
+                        None
+                    )
                     if not matched_fa and "/" not in row_title:
-                        matched_fa = next((t for t in sorted_targets if clean_title(t) in row_title), None)
+                        matched_fa = next(
+                            (t for t in sorted_targets if clean_title(t) in row_title),
+                            None
+                        )
 
                     if not matched_fa and row is not header_tr and "/" not in row_title and len(row_title) >= 2:
                         unrecognized_titles.add(row_title)
+
+                    if matched_fa:
+                        symbol_keys = SYMBOL_MAP[matched_fa]
+                        primary_key = symbol_keys[0]
+
+                        # گارد ضدتداخل ارز آزاد (توضیح کامل بالای حلقه):
+                        # اگر این نماد یکی از ارزهای آزاد است ولی جدول فعلی
+                        # داخل کانتینر رسمی ایران نیست، این را match نامعتبر
+                        # در نظر می‌گیریم (رد ردیف‌های ارز کشورهای دیگر).
+                        if (
+                            primary_key in FREE_MARKET_CURRENCY_KEYS
+                            and currency_tables is not None
+                            and table not in currency_tables
+                        ):
+                            matched_fa = None
 
                     if matched_fa:
                         symbol_keys = SYMBOL_MAP[matched_fa]
@@ -508,52 +536,21 @@ def scrape_homepage_data(last_known_prices: dict = None):
                                     price_cell = cols[price_col_idx]
 
                         price_str, price_num = parse_price_value(get_cell_text(price_cell), is_index=(primary_key in INDICES))
+                        
                         change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
                         change_amt, change_pct, change_num = parse_changes(change_cell, price_num)
-
-                        # مکانیزم ارزیابی نوسان شدید (Sanity Check) و لایه‌های Fallback
-                        last_known = last_known_prices.get(primary_key)
-                        is_outlier = False
-                        
-                        if price_num > 0 and last_known and last_known > 0:
-                            pct_change = abs(price_num - last_known) / last_known * 100
-                            if pct_change > SANITY_MAX_DEVIATION_PCT:
-                                is_outlier = True
-                                logging.warning(f"مقدار پرت برای {primary_key} شناسایی شد: {price_num} (تغییر {pct_change:.2f}٪)")
-
-                        # لایه ۲: اگر قیمت یافت نشد یا پرت بود و برای آن لینک اختصاصی داریم
-                        if (price_num == 0 or is_outlier) and primary_key in TARGET_ASSETS_PROFILE:
-                            profile_info = TARGET_ASSETS_PROFILE[primary_key]
-                            logging.info(f"در حال دریافت قیمت {primary_key} از صفحه اختصاصی...")
-                            fallback_val = fetch_price_from_profile(profile_info["profile_url"])
-                            
-                            if fallback_val:
-                                if last_known and last_known > 0:
-                                    fb_change = abs(fallback_val - last_known) / last_known * 100
-                                    if fb_change <= SANITY_MAX_DEVIATION_PCT:
-                                        price_num = fallback_val
-                                        price_str = format_number_with_comma(price_num)
-                                        is_outlier = False
-                                else:
-                                    price_num = fallback_val
-                                    price_str = format_number_with_comma(price_num)
-                                    is_outlier = False
-
-                        # لایه ۳: حفظ آخرین قیمت معتبر در صورت رد شدن لایه‌های قبلی
-                        if is_outlier and last_known:
-                            logging.info(f"حفظ آخرین قیمت معتبر برای {primary_key}: {last_known}")
-                            price_num = last_known
-                            price_str = format_number_with_comma(price_num)
 
                         # تبدیل قیمت از ریال به تومان برای نمادهای مشخص‌شده
                         if primary_key in TOMAN_SYMBOLS and price_num:
                             price_num = price_num / 10
                             price_str = format_number_with_comma(price_num)
 
+                        display_title = matched_fa
+
                         for skey in symbol_keys:
                             scraped_data.append({
                                 "symbol_key": skey,
-                                "title_fa": matched_fa,
+                                "title_fa": display_title,
                                 "price": price_str,
                                 "unit": get_unit(skey),
                                 "price_num": price_num,
@@ -563,7 +560,7 @@ def scrape_homepage_data(last_known_prices: dict = None):
                                 "updated_at": updated_at
                             })
     except Exception as e:
-        logging.error(f"خطا در استخراج: {e}")
+        print(f"خطا در استخراج: {e}", flush=True)
 
     unique_data = {}
     for item in scraped_data:
@@ -587,10 +584,81 @@ def scrape_homepage_data(last_known_prices: dict = None):
         item.pop("price_num", None)
         item.pop("change_num", None)
 
+    known_header_keywords = ["قیمت زنده", "آخرین قیمت", "قیمت / دلار", "ارزش", "تغییر"]
+    all_headers_text = " ".join(seen_header_texts)
+    if seen_header_texts and not any(kw in all_headers_text for kw in known_header_keywords):
+        print(
+            "🚨 هشدار جدی: هیچ‌کدام از سرستون‌های شناخته‌شده در هیچ جدولی روی صفحه پیدا نشد.",
+            flush=True,
+        )
+
+    if unrecognized_titles:
+        sample = sorted(unrecognized_titles)[:15]
+        print(
+            f"\n💡 {len(unrecognized_titles)} عنوان ردیف ناشناخته پیدا شد: {' | '.join(sample)}",
+            flush=True,
+        )
+
     return list(unique_data.values())
 
-def fetch_bourse_total_index(last_known_price: float = None):
-    """استخراج شاخص کل بورس (gc30) با پشتیبانی از لایه‌های Fallback"""
+
+def find_value_for_label(soup, labels):
+    """
+    جست‌وجوی مقدار مقابل یک برچسب (مثلا «نرخ فعلی») در جدول‌های اطلاعات
+    یک صفحه اختصاصی (profile) تک‌دارایی. قبلاً این تابع فقط داخل
+    fetch_bourse_total_index تعریف شده بود؛ چون حالا fetch_profile_price هم
+    (پایین‌تر) به همین منطق نیاز دارد، به یک تابع مستقل و قابل استفادهٔ
+    مجدد تبدیل شد - بدون هیچ تغییری در نحوهٔ کارش.
+    """
+    for row in soup.find_all("tr"):
+        cells = row.find_all(["th", "td"])
+        if len(cells) < 2:
+            continue
+        for i, c in enumerate(cells):
+            c_txt = clean_title(get_cell_text(c))
+            if any(lbl in c_txt for lbl in labels):
+                if i + 1 < len(cells):
+                    return get_cell_text(cells[i + 1])
+                elif i - 1 >= 0:
+                    return get_cell_text(cells[i - 1])
+    for item in soup.select("li, div"):
+        spans = item.find_all(["span", "div", "td"], recursive=False)
+        if len(spans) >= 2:
+            label_txt = clean_title(get_cell_text(spans[0]))
+            if any(lbl in label_txt for lbl in labels):
+                return get_cell_text(spans[1])
+    return None
+
+
+def fetch_profile_price(url: str, is_toman: bool = False):
+    """
+    لایهٔ حفاظتی دوم برای دارایی‌های پرریسک (PROFILE_FALLBACK_URLS). چون این
+    صفحات فقط یک دارایی را نشان می‌دهند (نه یک جدول بزرگ با چندین ردیف
+    هم‌نام مثل صفحهٔ اصلی)، عملاً همان ریسک تداخل نامی که باعث باگ دلار شد
+    اینجا وجود ندارد؛ برای همین به‌عنوان داور مستقل استفاده می‌شود.
+    خروجی: تاپل (price_str, price_num) یا None اگر چیزی پیدا نشد/خطا داد.
+    """
+    try:
+        html = fetch_rendered_html(url, extra_wait=2.0)
+        if not html:
+            return None
+        soup = BeautifulSoup(html, "html.parser")
+        raw_price = find_value_for_label(soup, ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای", "آخرین قیمت"])
+        if raw_price is None:
+            return None
+        price_str, price_num = parse_price_value(raw_price, is_index=False)
+        if price_num is None:
+            return None
+        if is_toman:
+            price_num = price_num / 10
+            price_str = format_number_with_comma(price_num)
+        return price_str, price_num
+    except Exception as e:
+        print(f"⚠️ خطا در خواندن صفحه اختصاصی ({url}) برای لایه حفاظتی دوم: {e}", flush=True)
+        return None
+
+
+def fetch_bourse_total_index():
     tehran_tz = pytz.timezone('Asia/Tehran')
     updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -598,55 +666,24 @@ def fetch_bourse_total_index(last_known_price: float = None):
     amount_labels = ["میزان تغییر نسبت به روز گذشته", "میزان تغییر"]
     percent_labels = ["درصد تغییر نسبت به روز گذشته", "درصد تغییر"]
 
-    def find_value_for_label(soup, labels):
-        for row in soup.find_all("tr"):
-            cells = row.find_all(["th", "td"])
-            if len(cells) < 2:
-                continue
-            for i, c in enumerate(cells):
-                c_txt = clean_title(get_cell_text(c))
-                if any(lbl in c_txt for lbl in labels):
-                    if i + 1 < len(cells):
-                        return get_cell_text(cells[i + 1])
-                    elif i - 1 >= 0:
-                        return get_cell_text(cells[i - 1])
-        for item in soup.select("li, div"):
-            spans = item.find_all(["span", "div", "td"], recursive=False)
-            if len(spans) >= 2:
-                label_txt = clean_title(get_cell_text(spans[0]))
-                if any(lbl in label_txt for lbl in labels):
-                    return get_cell_text(spans[1])
-        return None
-
     try:
         html = fetch_rendered_html("https://www.tgju.org/profile/gc30", extra_wait=2.0)
-        raw_price = None
-        if html:
-            soup = BeautifulSoup(html, "html.parser")
-            raw_price = find_value_for_label(soup, price_labels)
-            raw_amount = find_value_for_label(soup, amount_labels)
-            raw_percent = find_value_for_label(soup, percent_labels)
+        if not html:
+            return None
+        soup = BeautifulSoup(html, "html.parser")
 
-        # اگر با Playwright استخراج نشد، از requests روی صفحه اختصاصی (لایه ۲) تلاش می‌کنیم
-        if not raw_price:
-            fallback_val = fetch_price_from_profile("https://www.tgju.org/profile/gc30")
-            if fallback_val:
-                raw_price = str(fallback_val)
-                raw_amount, raw_percent = "0", "0%"
+        raw_price = find_value_for_label(soup, price_labels)
+        raw_amount = find_value_for_label(soup, amount_labels)
+        raw_percent = find_value_for_label(soup, percent_labels)
 
-        if not raw_price and last_known_price:
-            # لایه ۳: استفاده از آخرین مقدار معروف
-            raw_price = str(last_known_price)
-            raw_amount, raw_percent = "0", "0%"
-
-        if not raw_price:
-            logging.warning("عدم موفقیت در دریافت شاخص کل بورس.")
+        if raw_price is None:
+            print("هشدار: مقدار «نرخ فعلی» برای شاخص کل (gc30) پیدا نشد.", flush=True)
             return None
 
         price_str, price_num = parse_price_value(raw_price, is_index=True)
 
         change_amt = "0"
-        if raw_amount:
+        if raw_amount is not None:
             amt_clean = to_english_digits(raw_amount)
             amt_match = re.search(r'(-?\d+(?:\.\d+)?)', amt_clean)
             if amt_match:
@@ -657,7 +694,7 @@ def fetch_bourse_total_index(last_known_price: float = None):
                 change_amt = format_number_with_comma(amt_val)
 
         change_pct = "0%"
-        if raw_percent:
+        if raw_percent is not None:
             pct_clean = to_english_digits(raw_percent)
             pct_match = re.search(r'(-?\d+(?:\.\d+)?)', pct_clean)
             if pct_match:
@@ -677,7 +714,7 @@ def fetch_bourse_total_index(last_known_price: float = None):
             "updated_at": updated_at
         }
     except Exception as e:
-        logging.error(f"خطا در استخراج شاخص کل بورس: {e}")
+        print(f"خطا در استخراج شاخص کل بورس از gc30: {e}", flush=True)
         return None
 
 def get_db_connection():
@@ -689,11 +726,12 @@ def get_db_connection():
             turso_url = turso_url.replace("libsql://", "https://")
         elif not turso_url.startswith("https://"):
             turso_url = f"https://{turso_url}"
-        logging.info(f"اتصال مستقیم به دیتابیس Turso ({turso_url}) ...")
+        print(f"اتصال مستقیم به دیتابیس Turso ({turso_url}) ...", flush=True)
         return libsql.connect(database=turso_url, auth_token=turso_token)
     else:
-        logging.info("اتصال به SQLite محلی ...")
+        print("اتصال به SQLite محلی ...", flush=True)
         return sqlite3.connect("market_database.db")
+
 
 def write_data_json(accepted):
     """ساخت/به‌روزرسانی snapshot استاتیک data.json از داده‌های پذیرفته‌شده"""
@@ -705,15 +743,18 @@ def write_data_json(accepted):
             json.dump(sorted_json_data, f, ensure_ascii=False, indent=2)
             f.write("\n")
         os.replace(temp_path, json_path)
-        logging.info(f"فایل {json_path} با موفقیت ایجاد/بروزرسانی شد ({len(sorted_json_data)} رکورد).")
+        print(
+            f"فایل {json_path} با موفقیت ایجاد/بروزرسانی شد ({len(sorted_json_data)} رکورد).",
+            flush=True,
+        )
         return True
     except Exception as e:
-        if os.path.exists(temp_path):
-            try:
+        try:
+            if os.path.exists(temp_path):
                 os.remove(temp_path)
-            except OSError:
-                pass
-        logging.error(f"خطا در ایجاد فایل {json_path}: {e}")
+        except OSError:
+            pass
+        print(f"خطا در ایجاد فایل {json_path}: {e}", flush=True)
         return False
 
 def update_database(data_list):
@@ -736,6 +777,7 @@ def update_database(data_list):
             )
         """)
 
+        # در صورتی که جدول قبلاً بدون ستون unit ساخته شده باشد، ستون را اضافه می‌کند
         try:
             cursor.execute("ALTER TABLE market_prices ADD COLUMN unit TEXT")
         except Exception:
@@ -754,7 +796,7 @@ def update_database(data_list):
                 "updated_at": row[6],
             }
     except Exception as e:
-        logging.warning(f"عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.")
+        print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
 
     accepted = []
     rejected_anomalies = []
@@ -763,6 +805,46 @@ def update_database(data_list):
         old = existing_rows.get(item["symbol_key"])
         old_val = _to_float(old["price"]) if old else None
         new_val = _to_float(item["price"])
+
+        # --- لایه حفاظتی دوم: تایید/تصحیح از طریق صفحه اختصاصی دارایی ---
+        # فقط برای نمادهای پرریسک (PROFILE_FALLBACK_URLS) و فقط وقتی انحراف
+        # از آخرین مقدار معتبر به‌اندازه‌ای زیاد است که مشکوک به خطای
+        # استخراج باشد (نه صرفاً نوسان طبیعی بازار). چون این صفحات فقط یک
+        # دارایی را نشان می‌دهند، ریسک تداخل جدولی مثل باگ دلار عملاً وجود
+        # ندارد؛ برای همین اینجا به‌عنوان داور مستقل استفاده می‌شود، نه صرفاً
+        # یک رد کورکورانه مثل گارد رقمی پایین‌تر.
+        if (
+            item["symbol_key"] in PROFILE_FALLBACK_URLS
+            and old_val is not None
+            and new_val is not None
+            and old_val != 0
+        ):
+            percent_vs_old = abs(new_val - old_val) / abs(old_val) * 100
+            if percent_vs_old >= PROFILE_FALLBACK_PERCENT_THRESHOLD:
+                print(
+                    f"🔍 انحراف {percent_vs_old:.0f}% برای {item['symbol_key']} ({item['title_fa']}) - "
+                    f"بررسی صفحه اختصاصی به‌عنوان داور مستقل...",
+                    flush=True,
+                )
+                fallback = fetch_profile_price(
+                    PROFILE_FALLBACK_URLS[item["symbol_key"]],
+                    is_toman=(item["symbol_key"] in TOMAN_SYMBOLS),
+                )
+                if fallback:
+                    fb_price_str, fb_price_num = fallback
+                    fb_vs_new = abs(fb_price_num - new_val) / abs(new_val) * 100 if new_val else 100
+                    if fb_vs_new <= 3:
+                        print(f"   ✅ صفحه اختصاصی مقدار صفحه اصلی را تایید کرد ({fb_price_str}) - نوسان واقعی بازار است.", flush=True)
+                    else:
+                        print(
+                            f"   ⚠️ مقدار صفحه اصلی ({item['price']}) با صفحه اختصاصی ({fb_price_str}) "
+                            f"هم‌خوانی نداشت - مقدار صفحه اختصاصی جایگزین شد.",
+                            flush=True,
+                        )
+                        item["price"] = fb_price_str
+                        new_val = fb_price_num
+                else:
+                    print("   ⚠️ صفحه اختصاصی هم در دسترس نبود؛ طبق قوانین صحت‌سنجی معمول تصمیم‌گیری می‌شود.", flush=True)
 
         if old_val is not None and new_val is not None and old_val != 0:
             old_digits, new_digits = _digit_count(old_val), _digit_count(new_val)
@@ -775,7 +857,15 @@ def update_database(data_list):
                 })
                 continue
 
+            percent_change = abs(new_val - old_val) / abs(old_val) * 100
+            if percent_change >= SANITY_PERCENT_WARN_THRESHOLD:
+                print(
+                    f"⚠️ هشدار: {item['symbol_key']} ({item['title_fa']}) با {percent_change:.0f}% تغییر کرده.",
+                    flush=True,
+                )
+
         accepted.append(item)
+
 
     complete_snapshot = dict(existing_rows)
     for item in accepted:
@@ -806,33 +896,59 @@ def update_database(data_list):
                 ))
 
             conn.commit()
-            logging.info(f"تعداد {len(accepted)} شاخص در دیتابیس بروزرسانی شد.")
+            print(f"تعداد {len(accepted)} شاخص در دیتابیس بروزرسانی شد.", flush=True)
         except Exception as e:
-            logging.error(f"خطای دیتابیس (فایل data.json بدون مشکل تولید شد): {e}")
+            print(f"❌ خطای دیتابیس (فایل data.json بدون مشکل تولید شد): {e}", flush=True)
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
     else:
-        logging.info("دیتابیس در دسترس نبود اما data.json با موفقیت به‌روزرسانی شد.")
+        print("ℹ️ دیتابیس در دسترس نبود اما data.json با موفقیت به‌روزرسانی شد.", flush=True)
 
     if rejected_anomalies:
-        logging.warning(f"{len(rejected_anomalies)} مورد به دلیل جهش رقمی مشکوک رد شدند.")
+        print(f"\n🚫 {len(rejected_anomalies)} مورد به دلیل جهش رقمی مشکوک رد شدند.", flush=True)
+
+    expected_roster = {sk for keys in SYMBOL_MAP.values() for sk in keys} | {"bourse_total"}
+    matched_roster = {item["symbol_key"] for item in accepted}
+    missing_this_run = sorted(expected_roster - matched_roster)
+    if missing_this_run:
+        print(f"\n📋 {len(missing_this_run)} نماد در این اجرا پیدا نشدند: {', '.join(missing_this_run)}", flush=True)
+
+    STALE_HOURS = 48
+    try:
+        now = datetime.now(pytz.timezone('Asia/Tehran'))
+        stale = []
+        for symbol_key, row in existing_rows.items():
+            if symbol_key in matched_roster:
+                continue
+            try:
+                last_dt = pytz.timezone('Asia/Tehran').localize(datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S"))
+                hours_old = (now - last_dt).total_seconds() / 3600
+                if hours_old >= STALE_HOURS:
+                    stale.append((symbol_key, round(hours_old)))
+            except (ValueError, TypeError):
+                continue
+        if stale:
+            stale.sort(key=lambda x: -x[1])
+            print(f"\n⏰ این نمادها بیش از {STALE_HOURS} ساعت است بروزرسانی نشده‌اند (به‌احتمال زیاد الگوی match‌شان خراب شده):", flush=True)
+            for symbol_key, hours_old in stale:
+                print(f"   - {symbol_key}: {hours_old} ساعت قدیمی", flush=True)
+    except Exception as e:
+        print(f"هشدار: محاسبهٔ گزارش داده‌های قدیمی ممکن نشد: {e}", flush=True)
 
 if __name__ == "__main__":
     try:
-        last_known_prices = get_last_known_prices()
-        data = scrape_homepage_data(last_known_prices)
+        data = scrape_homepage_data()
 
-        bourse_total_item = fetch_bourse_total_index(last_known_prices.get("bourse_total"))
+        bourse_total_item = fetch_bourse_total_index()
         if bourse_total_item:
             data.append(bourse_total_item)
 
         if data:
             update_database(data)
-            print("اجرای فرآیند استخراج و بروزرسانی دیتابیس با موفقیت پایان یافت.")
         else:
-            logging.warning("هیچ داده‌ای در این اجرا استخراج نشد.")
+            print("⚠️ هیچ داده‌ای در این اجرا استخراج نشد.", flush=True)
     except Exception as e:
-        logging.critical(f"خطای غیرمنتظره در اجرای اسکریپت: {e}")
+        print(f"❌ خطای غیرمنتظره در اجرای اسکریپت: {e}", flush=True)
