@@ -414,40 +414,49 @@ def scrape_homepage_data():
         if html:
             soup = BeautifulSoup(html, "html.parser")
 
-            # --- ریشهٔ اصلی باگ «دلار = 85,840 به‌جای 233,500» ---
-            # صفحه اصلی tgju.org یک ویجت تب‌دار «نرخ ارز آزاد» دارد که علاوه بر
-            # جدول ایران، جدول مشابهی هم برای کشورهای دیگر (افغانستان، ترکیه،
-            # عراق، امارات، قطر، آذربایجان، ارمنستان، تاجیکستان، ترکمنستان،
-            # عربستان، عمان) دارد - و در هر کدام از این جدول‌های کشورهای دیگر هم
-            # یک ردیف دقیقاً با عنوان «دلار» وجود دارد (نرخ دلار به پول محلی آن
-            # کشور)! چون این تب‌ها همگی در HTML واقعی صفحه حاضرند (فقط با CSS
-            # مخفی می‌شوند، نه واقعاً حذف)، BeautifulSoup همهٔ آن‌ها را می‌بیند.
-            # کد قدیمی هر جدولی را که یک ردیف «دلار» معتبر داشت قبول می‌کرد - و
-            # هر کدام که زودتر در HTML ظاهر می‌شد برنده بود، حالا چه جدول واقعی
-            # ایران باشد چه یکی از جدول‌های کشورهای دیگر.
-            # راه‌حل: با استفاده از id مستندشدهٔ خود سایت برای تب ایران
-            # («currency-overview-content»)، ردیف‌های ارز آزاد را فقط داخل همین
-            # کانتینر جست‌وجو می‌کنیم. اگر این id به هر دلیلی (مثلا تغییر بعدی
-            # سایت) پیدا نشود، به‌جای اینکه همه ارزها را از کار بیندازیم، فقط
-            # هشدار می‌دهیم و به رفتار قبلی (بدون محدودیت) برمی‌گردیم - یعنی این
-            # اصلاح هرگز نمی‌تواند وضعیت را بدتر از قبل کند.
-            currency_container = soup.find(id="currency-overview-content")
-            if currency_container is not None:
-                currency_tables = set(currency_container.find_all("table"))
-            else:
-                currency_tables = None
-                print(
-                    "⚠️ هشدار: کانتینر «currency-overview-content» (جدول ارز آزاد ایران) "
-                    "پیدا نشد؛ محدودسازی ضدتداخل ارزها غیرفعال است و ممکن است دوباره خطر "
-                    "قاطی‌شدن با جدول‌های ارز کشورهای دیگر وجود داشته باشد - لطفاً ساختار "
-                    "فعلی صفحه را دستی بررسی کنید.",
-                    flush=True,
-                )
+            # --- ریشهٔ باگ «دلار = 85,840 به‌جای 233,500» ---
+            # صفحه اصلی چند تب ارز دارد: «ارز آزاد» (بازار واقعی - همینو
+            # می‌خواهیم)، و همچنین «ارز نیمایی»/«ارز مبادله‌ای» (نرخ‌های رسمی/
+            # صادراتی) و جدول‌های مشابه کشورهای دیگر (افغانستان، ترکیه، ...).
+            # همهٔ این‌ها می‌توانند یک ردیف دقیقاً به اسم «دلار» داشته باشند، با
+            # عددی کاملاً متفاوت. تلاش قبلی برای محدودسازی از طریق
+            # id="currency-overview-content" کار نکرد (این id هیچ‌وقت روی
+            # صفحهٔ واقعی پیدا نشد - لاگ‌های اجراهای واقعی این را ثابت کردند).
+            # روش جدید: به‌جای گیر دادن به یک id ثابت، برای هر جدول، عبارت
+            # تب/برچسبش را در attributeهای خودش و اجدادش (تا عمق ۶) می‌گردیم؛
+            # اگر «ارز آزاد»/«ارز ازاد» دیدیم امتیاز مثبت، اگر «نیمایی» یا
+            # «مبادله» دیدیم امتیاز منفی می‌دهیم. در پایان (در مرحلهٔ dedup)،
+            # برای نمادهای ارزی، جدولی که امتیاز بالاتر دارد برنده می‌شود - نه
+            # صرفاً هرکدام که زودتر در HTML ظاهر شده. اگر هیچ‌کدام امتیاز
+            # نداشتند (سایت باز هم تغییر کرد)، رفتار به حالت قبلی (اولین مورد
+            # معتبر) برمی‌گردد - یعنی این روش هرگز چیزی را بدتر از قبل نمی‌کند.
+            FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
+            OFFICIAL_RATE_LABELS = ("نیمایی", "مبادله")
+
+            def _currency_table_affinity(tbl):
+                score = 0
+                node, depth = tbl, 0
+                while node is not None and depth < 6:
+                    attrs = getattr(node, "attrs", None)
+                    if attrs:
+                        blob = " ".join(
+                            v if isinstance(v, str) else " ".join(v)
+                            for v in attrs.values()
+                        )
+                        if any(lbl in blob for lbl in FREE_MARKET_LABELS):
+                            score += 10
+                        if any(lbl in blob for lbl in OFFICIAL_RATE_LABELS):
+                            score -= 10
+                    node = getattr(node, "parent", None)
+                    depth += 1
+                return score
 
             for table in soup.find_all("table"):
                 price_col_idx, change_col_idx = 1, 2
                 header_tr = table.find("tr")
                 header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+                table_currency_affinity = _currency_table_affinity(table)
+
 
                 seen_header_texts.append(" ".join(get_cell_text(c) for c in header_cells))
 
@@ -484,21 +493,6 @@ def scrape_homepage_data():
 
                     if not matched_fa and row is not header_tr and "/" not in row_title and len(row_title) >= 2:
                         unrecognized_titles.add(row_title)
-
-                    if matched_fa:
-                        symbol_keys = SYMBOL_MAP[matched_fa]
-                        primary_key = symbol_keys[0]
-
-                        # گارد ضدتداخل ارز آزاد (توضیح کامل بالای حلقه):
-                        # اگر این نماد یکی از ارزهای آزاد است ولی جدول فعلی
-                        # داخل کانتینر رسمی ایران نیست، این را match نامعتبر
-                        # در نظر می‌گیریم (رد ردیف‌های ارز کشورهای دیگر).
-                        if (
-                            primary_key in FREE_MARKET_CURRENCY_KEYS
-                            and currency_tables is not None
-                            and table not in currency_tables
-                        ):
-                            matched_fa = None
 
                     if matched_fa:
                         symbol_keys = SYMBOL_MAP[matched_fa]
@@ -557,15 +551,29 @@ def scrape_homepage_data():
                                 "change_amount": change_amt,
                                 "change_percent": change_pct,
                                 "change_num": change_num,
-                                "updated_at": updated_at
+                                "updated_at": updated_at,
+                                "_affinity": table_currency_affinity,
                             })
     except Exception as e:
         print(f"خطا در استخراج: {e}", flush=True)
 
+    # ساخت دیتای یکتا: به‌طور پیش‌فرض «اولین match معتبر» برنده است (رفتار
+    # قدیمی). اما برای نمادهای ارز آزاد (FREE_MARKET_CURRENCY_KEYS)، بین همهٔ
+    # جدول‌های match‌شده، جدولی که امتیاز تب بالاتری دارد (واقعاً «ارز آزاد»
+    # است، نه «نیمایی»/«مبادله‌ای»/جدول یک کشور دیگر) برنده می‌شود.
     unique_data = {}
+    best_affinity = {}
     for item in scraped_data:
         key = item["symbol_key"]
-        if key not in unique_data or unique_data[key]["price"] == "-":
+        affinity = item.pop("_affinity", 0)
+        if key not in unique_data:
+            unique_data[key] = item
+            best_affinity[key] = affinity
+        elif key in FREE_MARKET_CURRENCY_KEYS:
+            if affinity > best_affinity.get(key, 0) or (unique_data[key]["price"] == "-" and item["price"] != "-"):
+                unique_data[key] = item
+                best_affinity[key] = affinity
+        elif unique_data[key]["price"] == "-":
             unique_data[key] = item
 
     # ضرب مقدار تغییرات رمزارزها در نرخ تومانی دلار
@@ -806,47 +814,49 @@ def update_database(data_list):
         old_val = _to_float(old["price"]) if old else None
         new_val = _to_float(item["price"])
 
-        # --- لایه حفاظتی دوم: تایید/تصحیح از طریق صفحه اختصاصی دارایی ---
-        # فقط برای نمادهای پرریسک (PROFILE_FALLBACK_URLS) و فقط وقتی انحراف
-        # از آخرین مقدار معتبر به‌اندازه‌ای زیاد است که مشکوک به خطای
-        # استخراج باشد (نه صرفاً نوسان طبیعی بازار). چون این صفحات فقط یک
-        # دارایی را نشان می‌دهند، ریسک تداخل جدولی مثل باگ دلار عملاً وجود
-        # ندارد؛ برای همین اینجا به‌عنوان داور مستقل استفاده می‌شود، نه صرفاً
-        # یک رد کورکورانه مثل گارد رقمی پایین‌تر.
-        if (
-            item["symbol_key"] in PROFILE_FALLBACK_URLS
-            and old_val is not None
-            and new_val is not None
-            and old_val != 0
-        ):
-            percent_vs_old = abs(new_val - old_val) / abs(old_val) * 100
-            if percent_vs_old >= PROFILE_FALLBACK_PERCENT_THRESHOLD:
+        # --- لایه حفاظتی دوم: برای ۶ نماد پرریسک، صفحهٔ اختصاصی همیشه در
+        # اولویت است، نه فقط وقتی انحراف مشکوک دیده شود ---
+        # قبلاً فقط وقتی صدا زده می‌شد که انحراف از آخرین مقدار دیتابیس زیاد
+        # بود. مشکل: اگر یک بار عدد اشتباهی در دیتابیس ثبت شده باشد (چون آن
+        # لحظه خودش رد نشده بود)، همان عدد اشتباه به «مبنا»ی مقایسه تبدیل
+        # می‌شد و دیگر هیچ عدد درستی که با آن فرق زیادی داشت نمی‌توانست
+        # جایگزینش شود (رد می‌شد چون «انحراف مشکوک» با همان مبنای غلط).
+        # الان دیگر منتظر انحراف نمی‌مانیم: صفحهٔ اختصاصی این ۶ نماد را در هر
+        # اجرا مستقیماً می‌خوانیم و به‌عنوان منبع اصلی/معتبرتر جایگزین مقدار
+        # صفحهٔ اصلی می‌کنیم - چون این صفحات فقط یک دارایی نشان می‌دهند، ریسک
+        # تداخل جدولی (باگ‌های قبلی) در آن‌ها عملاً وجود ندارد. اگر این صفحه
+        # در دسترس نبود (خطای شبکه و ...)، به‌جای گیر افتادن، از مقدار صفحهٔ
+        # اصلی + گاردهای صحت‌سنجی معمول (پایین‌تر) استفاده می‌شود - دقیقاً
+        # همان محافظت قبلی، فقط به‌عنوان fallback نه مسیر اول.
+        used_profile_source = False
+        if item["symbol_key"] in PROFILE_FALLBACK_URLS:
+            fallback = fetch_profile_price(
+                PROFILE_FALLBACK_URLS[item["symbol_key"]],
+                is_toman=(item["symbol_key"] in TOMAN_SYMBOLS),
+            )
+            if fallback:
+                fb_price_str, fb_price_num = fallback
+                if item["price"] != fb_price_str:
+                    print(
+                        f"ℹ️ {item['symbol_key']} ({item['title_fa']}): مقدار صفحهٔ اصلی "
+                        f"({item['price']}) با صفحهٔ اختصاصی ({fb_price_str}) فرق داشت - "
+                        f"طبق اولویت، مقدار صفحهٔ اختصاصی ثبت شد.",
+                        flush=True,
+                    )
+                item["price"] = fb_price_str
+                new_val = fb_price_num
+                used_profile_source = True
+            else:
                 print(
-                    f"🔍 انحراف {percent_vs_old:.0f}% برای {item['symbol_key']} ({item['title_fa']}) - "
-                    f"بررسی صفحه اختصاصی به‌عنوان داور مستقل...",
+                    f"⚠️ {item['symbol_key']}: صفحهٔ اختصاصی در دسترس نبود؛ از مقدار صفحهٔ "
+                    f"اصلی + قوانین صحت‌سنجی معمول استفاده می‌شود.",
                     flush=True,
                 )
-                fallback = fetch_profile_price(
-                    PROFILE_FALLBACK_URLS[item["symbol_key"]],
-                    is_toman=(item["symbol_key"] in TOMAN_SYMBOLS),
-                )
-                if fallback:
-                    fb_price_str, fb_price_num = fallback
-                    fb_vs_new = abs(fb_price_num - new_val) / abs(new_val) * 100 if new_val else 100
-                    if fb_vs_new <= 3:
-                        print(f"   ✅ صفحه اختصاصی مقدار صفحه اصلی را تایید کرد ({fb_price_str}) - نوسان واقعی بازار است.", flush=True)
-                    else:
-                        print(
-                            f"   ⚠️ مقدار صفحه اصلی ({item['price']}) با صفحه اختصاصی ({fb_price_str}) "
-                            f"هم‌خوانی نداشت - مقدار صفحه اختصاصی جایگزین شد.",
-                            flush=True,
-                        )
-                        item["price"] = fb_price_str
-                        new_val = fb_price_num
-                else:
-                    print("   ⚠️ صفحه اختصاصی هم در دسترس نبود؛ طبق قوانین صحت‌سنجی معمول تصمیم‌گیری می‌شود.", flush=True)
 
-        if old_val is not None and new_val is not None and old_val != 0:
+        # اگر مقدار از صفحهٔ اختصاصی (منبع معتبرتر) آمده، دیگر لازم نیست با
+        # مبنای قدیمی دیتابیس مقایسه/رد شود - همین که این پاسخ منبع authoritative
+        # است کافی است و از قفل‌شدن روی یک مبنای اشتباه قدیمی جلوگیری می‌کند.
+        if not used_profile_source and old_val is not None and new_val is not None and old_val != 0:
             old_digits, new_digits = _digit_count(old_val), _digit_count(new_val)
             if abs(old_digits - new_digits) >= SANITY_DIGIT_DIFF_THRESHOLD:
                 rejected_anomalies.append({
@@ -863,6 +873,7 @@ def update_database(data_list):
                     f"⚠️ هشدار: {item['symbol_key']} ({item['title_fa']}) با {percent_change:.0f}% تغییر کرده.",
                     flush=True,
                 )
+
 
         accepted.append(item)
 
@@ -908,7 +919,12 @@ def update_database(data_list):
         print("ℹ️ دیتابیس در دسترس نبود اما data.json با موفقیت به‌روزرسانی شد.", flush=True)
 
     if rejected_anomalies:
-        print(f"\n🚫 {len(rejected_anomalies)} مورد به دلیل جهش رقمی مشکوک رد شدند.", flush=True)
+        print(f"\n🚫 {len(rejected_anomalies)} مورد به دلیل جهش رقمی مشکوک رد شدند:", flush=True)
+        for a in rejected_anomalies:
+            print(
+                f"   - {a['symbol_key']} ({a['title_fa']}): مقدار قبلی {a['old_price']} <- مقدار جدید (رد شد) {a['new_price']}",
+                flush=True,
+            )
 
     expected_roster = {sk for keys in SYMBOL_MAP.values() for sk in keys} | {"bourse_total"}
     matched_roster = {item["symbol_key"] for item in accepted}
