@@ -125,6 +125,10 @@ SYMBOL_MAP = {
     "نفت سبک": ["oil_crude"],
     "نفت برنت": ["oil_brent"],
     "نفت اوپک": ["oil_opec"],
+    "نفت اپک": ["oil_opec"],
+    "نفت اُپک": ["oil_opec"],
+    "نفت اُوپک": ["oil_opec"],
+    "سبد نفتی اوپک": ["oil_opec"],
     "بنزین (RBOB)": ["gasoline"],
     "گاز طبیعی": ["natural_gas"],
     "زغال سنگ": ["coal"],
@@ -264,6 +268,7 @@ def clean_title(text: str) -> str:
         return ""
     text = text.replace('\u200c', ' ').replace('\u200f', '')
     text = text.replace('ي', 'ی').replace('ك', 'ک')
+    text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
     text = text.translate(_TITLE_DIGIT_TRANSLATION)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
@@ -516,7 +521,7 @@ def scrape_homepage_data():
                             price_num = price_num / 10
                             price_str = format_number_with_comma(price_num)
 
-                        display_title = matched_fa
+                        display_title = "نفت اوپک" if primary_key == "oil_opec" else matched_fa
 
                         for skey in symbol_keys:
                             scraped_data.append({
