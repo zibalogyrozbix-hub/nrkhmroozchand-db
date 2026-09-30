@@ -596,9 +596,13 @@ def scrape_homepage_data():
             if item.get("_time_diff_min") is not None and item["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES
         ]
 
+# استخراج عناوین یکتا از نمادهای قدیمی برای نمایش در لاگ
+        stale_names = list(dict.fromkeys([item.get('title_fa') or item.get('symbol_key') for item in stale_items]))
+        stale_str = " | ".join(stale_names)
+
         if stale_items and attempt < MAX_SCRAPE_RETRIES:
             print(
-                f"⚠️ برخی داده‌ها ({len(stale_items)} نماد) فاصله زمانی نامتعارف با تایم تهران دارند "
+                f"⚠️️ برخی داده‌ها ({len(stale_items)} نماد: {stale_str}) فاصله زمانی نامتعارف با تایم تهران دارند "
                 f"(بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه). احتمال فچ نشدن کامل داده‌ها؛ {RETRY_WAIT_SECONDS} ثانیه شکیبایی جهت بروزرسانی...",
                 flush=True
             )
@@ -607,7 +611,7 @@ def scrape_homepage_data():
         else:
             if stale_items:
                 print(
-                    f"ℹ️ پس از {MAX_SCRAPE_RETRIES} تلاش، همچنان {len(stale_items)} نماد دارای فاصله زمانی بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه بودند "
+                    f"ℹ️ پس از {MAX_SCRAPE_RETRIES} تلاش، همچنان {len(stale_items)} نماد ({stale_str}) دارای فاصله زمانی بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه بودند "
                     f"(احتمال تعطیلی بازار یا ثبات قیمت). داده‌های فعلی ثبت می‌شوند.",
                     flush=True
                 )
