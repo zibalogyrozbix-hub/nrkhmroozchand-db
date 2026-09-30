@@ -390,38 +390,81 @@ def is_real_data_table(table, header_cells) -> bool:
     return has_price_col and has_change_col
 
 def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> float | None:
-    """محاسبه اختلاف زمانی به دقیقه بین زمان درج‌شده در جدول و زمان جاری تهران"""
+    """
+    فاصلهٔ (به دقیقه) زمان درج‌شده در ردیف جدول تا «اکنونِ تهران».
+    خروجی None یعنی «قابل تشخیص نیست» (و در اعتبارسنجی نادیده گرفته می‌شود).
+    پشتیبانی از: «همین الان/چند ثانیه پیش»، «X دقیقه/ساعت پیش»، «دیروز»،
+    ساعت ساده (HH:MM[:SS])، و تاریخ شمسی/میلادی (به‌همراه یا بدون ساعت).
+    """
     if not raw_time_str:
         return None
     text = to_english_digits(raw_time_str).strip()
     if not text or text == "-":
         return None
 
-    if any(kw in text for kw in ["همین الان", "چند ثانیه", "دقایقی"]):
+    if any(kw in text for kw in ["همین الان", "همین الآن", "چند ثانیه", "لحظاتی", "دقایقی"]):
         return 0.0
 
     m_rel = re.search(r'(\d+)\s*دقیقه', text)
     if m_rel:
         return float(m_rel.group(1))
-
     h_rel = re.search(r'(\d+)\s*ساعت', text)
     if h_rel:
         return float(h_rel.group(1)) * 60.0
+    d_rel = re.search(r'(\d+)\s*روز', text)
+    if d_rel:
+        return float(d_rel.group(1)) * 1440.0
+    if "دیروز" in text:
+        return 1440.0
 
-    time_match = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', text)
-    if time_match:
-        hour = int(time_match.group(1))
-        minute = int(time_match.group(2))
-        second = int(time_match.group(3)) if time_match.group(3) else 0
+    # --- تاریخ (شمسی یا میلادی) ---
+    row_date = None
+    d_match = re.search(r'(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})', text)
+    if d_match:
+        y, mo, d = (int(d_match.group(i)) for i in (1, 2, 3))
+        try:
+            if y < 1700:
+                row_date = jdatetime.date(y, mo, d).togregorian()
+            else:
+                row_date = datetime(y, mo, d).date()
+        except Exception:
+            row_date = None
 
-        if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59:
-            row_dt = tehran_now.replace(hour=hour, minute=minute, second=second, microsecond=0)
-            diff_sec = (tehran_now - row_dt).total_seconds()
-            if diff_sec < -3600 * 12:
-                diff_sec += 86400
-            elif diff_sec > 3600 * 12:
-                diff_sec -= 86400
-            return abs(diff_sec) / 60.0
+    # --- ساعت ---
+    t_match = re.search(r'(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)', text)
+    hour = minute = second = None
+    if t_match:
+        hour, minute = int(t_match.group(1)), int(t_match.group(2))
+        second = int(t_match.group(3)) if t_match.group(3) else 0
+        if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+            hour = minute = second = None
+
+    today = tehran_now.date()
+
+    if row_date is not None:
+        if hour is None:
+            # فقط تاریخ: اگر امروز باشد از ساعتش خبر نداریم؛ اگر قدیمی‌تر باشد قطعاً کهنه است
+            days = (today - row_date).days
+            return float(days * 1440) if days > 0 else None
+        row_dt = tehran_now.tzinfo.localize(
+            datetime(row_date.year, row_date.month, row_date.day, hour, minute, second)
+        ) if hasattr(tehran_now.tzinfo, "localize") else tehran_now.replace(
+            year=row_date.year, month=row_date.month, day=row_date.day,
+            hour=hour, minute=minute, second=second, microsecond=0
+        )
+        diff_min = (tehran_now - row_dt).total_seconds() / 60.0
+        return max(diff_min, 0.0)
+
+    if hour is not None:
+        row_dt = tehran_now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+        diff_min = (tehran_now - row_dt).total_seconds() / 60.0
+        # ساعتِ «چند دقیقه در آینده» = اختلاف جزئی ساعت سرور/سایت؛ نادیده
+        if -10.0 <= diff_min < 0:
+            return 0.0
+        # ساعتی که از «اکنون» جلوتر است یعنی مربوط به دیروز بوده
+        if diff_min < 0:
+            diff_min += 1440.0
+        return diff_min
 
     return None
 
@@ -430,6 +473,13 @@ def scrape_homepage_data():
     MAX_SCRAPE_RETRIES = 3
     RETRY_WAIT_SECONDS = 5.0
     MAX_ACCEPTABLE_TIME_DIFF_MINUTES = 45.0  # آستانه فاصله زمانی نامتعارف (۴۵ دقیقه)
+    # فقط در این دو حالت «انتظار و تلاش مجدد» ارزش دارد (ردیف‌های کم‌معامله مثل
+    # انس پلاتین یا سکه گرمی ممکن است به‌طور طبیعی بیش از ۴۵ دقیقه به‌روز نشوند):
+    #  ۱) یکی از نمادهای حیاتی کهنه باشد
+    #  ۲) درصد بالایی از کل ردیف‌ها کهنه باشد (نشانهٔ بارگذاری ناقص JS سایت)
+    CRITICAL_KEYS = {"usd", "eur", "gold_18k", "coin_emami", "silver_gram", "btc"}
+    SYSTEMIC_STALE_RATIO = 0.30
+    MIN_ROWS_FOR_RATIO_CHECK = 10  # برای نمونهٔ خیلی کوچک، درصد معنی‌دار نیست
 
     sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
     FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
@@ -454,23 +504,34 @@ def scrape_homepage_data():
             depth += 1
         return score
 
-    scraped_data = []
-    seen_header_texts = []
-    unrecognized_titles = set()
+    best_attempt = None  # (score, scraped_data, seen_header_texts, unrecognized_titles)
 
     for attempt in range(1, MAX_SCRAPE_RETRIES + 1):
         print(f"در حال دریافت داده‌ها از tgju.org (تلاش {attempt} از {MAX_SCRAPE_RETRIES}) ...", flush=True)
-        tehran_now = datetime.now(tehran_tz)
-        updated_at = tehran_now.strftime("%Y-%m-%d %H:%M:%S")
-
-        scraped_data.clear()
-        seen_header_texts.clear()
-        unrecognized_titles.clear()
+        scraped_data = []
+        seen_header_texts = []
+        unrecognized_titles = set()
 
         try:
             html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0 * attempt)
+            # زمان مرجع «بعد از» رندر گرفته می‌شود، نه قبل از آن (رندر ~۱۵-۲۰ ثانیه طول می‌کشد)
+            tehran_now = datetime.now(tehran_tz)
+            updated_at = tehran_now.strftime("%Y-%m-%d %H:%M:%S")
             if html:
                 soup = BeautifulSoup(html, "html.parser")
+
+                # ریشهٔ باگ «دلار = 85,840 به‌جای 233,500»: تب‌های ارز کشورهای دیگر
+                # هم ردیف «دلار» دارند. ارزهای آزاد فقط از کانتینر ایران پذیرفته می‌شوند.
+                currency_container = soup.find(id="currency-overview-content")
+                if currency_container is not None:
+                    currency_tables = set(currency_container.find_all("table"))
+                else:
+                    currency_tables = None
+                    print(
+                        "⚠️ هشدار: کانتینر «currency-overview-content» پیدا نشد؛ محدودسازی ضدتداخل "
+                        "ارزها غیرفعال است (فقط امتیاز affinity جدول اعمال می‌شود).",
+                        flush=True,
+                    )
 
                 for table in soup.find_all("table"):
                     price_col_idx, change_col_idx = 1, 2
@@ -515,6 +576,16 @@ def scrape_homepage_data():
 
                         if not matched_fa and row is not header_tr and "/" not in row_title and len(row_title) >= 2:
                             unrecognized_titles.add(row_title)
+
+                        if matched_fa:
+                            symbol_keys = SYMBOL_MAP[matched_fa]
+                            primary_key = symbol_keys[0]
+                            if (
+                                primary_key in FREE_MARKET_CURRENCY_KEYS
+                                and currency_tables is not None
+                                and table not in currency_tables
+                            ):
+                                matched_fa = None
 
                         if matched_fa:
                             symbol_keys = SYMBOL_MAP[matched_fa]
@@ -584,32 +655,59 @@ def scrape_homepage_data():
         except Exception as e:
             print(f"خطا در استخراج (تلاش {attempt}): {e}", flush=True)
 
-        # اعتبارسنجی فاصله زمانی داده‌ها
-        stale_items = [
-            item for item in scraped_data 
-            if item.get("_time_diff_min") is not None and item["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES
-        ]
+        # ---------- اعتبارسنجی فاصله زمانی ----------
+        timed = [i for i in scraped_data if i.get("_time_diff_min") is not None]
+        stale_items = [i for i in timed if i["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES]
+        critical_stale = [i for i in stale_items if i["symbol_key"] in CRITICAL_KEYS]
+        stale_ratio = (len(stale_items) / len(timed)) if timed else 0.0
 
-        # استخراج عناوین یکتا از نمادهای قدیمی برای نمایش در لاگ
-        stale_names = list(dict.fromkeys([item.get('title_fa') or item.get('symbol_key') for item in stale_items]))
-        stale_str = " | ".join(stale_names)
+        def _names(items):
+            return " | ".join(dict.fromkeys(i.get("title_fa") or i["symbol_key"] for i in items))
 
-        if stale_items and attempt < MAX_SCRAPE_RETRIES:
+        # نمرهٔ کیفیت این تلاش (کمتر = بهتر): بدون داده بدترین است
+        score = (
+            0 if scraped_data else 1,
+            len(critical_stale),
+            round(stale_ratio, 3),
+            -len(scraped_data),
+        )
+        if best_attempt is None or score <= best_attempt[0]:
+            best_attempt = (score, scraped_data, seen_header_texts, unrecognized_titles)
+
+        if not timed and scraped_data:
+            print("ℹ️ ستون زمان در هیچ جدولی پیدا/تفسیر نشد؛ اعتبارسنجی زمانی انجام نشد.", flush=True)
+            break
+
+        systemic_stale = len(timed) >= MIN_ROWS_FOR_RATIO_CHECK and stale_ratio >= SYSTEMIC_STALE_RATIO
+        need_retry = (not scraped_data) or bool(critical_stale) or systemic_stale
+
+        if need_retry and attempt < MAX_SCRAPE_RETRIES:
+            reason = (
+                f"نماد حیاتی کهنه: {_names(critical_stale)}" if critical_stale
+                else f"{len(stale_items)} از {len(timed)} ردیف ({stale_ratio:.0%}) کهنه" if scraped_data
+                else "هیچ داده‌ای استخراج نشد"
+            )
             print(
-                f"⚠ برخی داده‌ها ({len(stale_items)} نماد: {stale_str}) فاصله زمانی نامتعارف با تایم تهران دارند "
-                f"(بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه). احتمال فچ نشدن کامل داده‌ها؛ {RETRY_WAIT_SECONDS} ثانیه شکیبایی جهت بروزرسانی...",
-                flush=True
+                f"⚠ فاصله زمانی نامتعارف با تایم تهران (>{MAX_ACCEPTABLE_TIME_DIFF_MINUTES:.0f} دقیقه) - {reason}. "
+                f"{RETRY_WAIT_SECONDS:.0f} ثانیه صبر و تلاش مجدد...",
+                flush=True,
             )
             time.sleep(RETRY_WAIT_SECONDS)
             continue
-        else:
-            if stale_items:
-                print(
-                    f"ℹ️ پس از {MAX_SCRAPE_RETRIES} تلاش، همچنان {len(stale_items)} نماد ({stale_str}) دارای فاصله زمانی بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه بودند "
-                    f"(احتمال تعطیلی بازار یا ثبات قیمت). داده‌های فعلی ثبت می‌شوند.",
-                    flush=True
-                )
-            break
+
+        if stale_items:
+            print(
+                f"ℹ️ {len(stale_items)} نماد ({_names(stale_items)}) بیش از "
+                f"{MAX_ACCEPTABLE_TIME_DIFF_MINUTES:.0f} دقیقه از تایم تهران فاصله دارند "
+                f"(احتمال تعطیلی بازار/کم‌معامله بودن). بهترین نتیجهٔ به‌دست‌آمده ثبت می‌شود.",
+                flush=True,
+            )
+        break
+
+    if best_attempt is not None:
+        _, scraped_data, seen_header_texts, unrecognized_titles = best_attempt
+    else:
+        scraped_data, seen_header_texts, unrecognized_titles = [], [], set()
 
     unique_data = {}
     best_affinity = {}
