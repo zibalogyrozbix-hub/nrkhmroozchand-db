@@ -91,7 +91,7 @@ SYMBOL_MAP = {
     "منات ترکمنستان": ["tmt"],
 
     # ارزهای دیجیتال (فقط قیمت ریالی)
-    "بیت‌‌‌‌کوین": ["btc"],
+    "بیتکوین": ["btc"],
     "بیت کوین": ["btc"],
     "اتریوم": ["eth"],
     "تتر": ["usdt"],
@@ -209,12 +209,6 @@ FREE_MARKET_CURRENCY_KEYS = {
     "kgs", "kwd", "myr", "nok", "nzd", "omr", "pkr", "qar", "rub", "sar",
     "sek", "sgd", "syp", "thb", "tjs", "tmt",
 }
-
-# حذف لایه پشتیبان برای دلار، یورو، طلا، سکه و نقره؛ فقط بیت‌کوین حفظ شده است
-PROFILE_FALLBACK_URLS = {
-    "btc": "https://www.tgju.org/profile/crypto-bitcoin",
-}
-PROFILE_FALLBACK_PERCENT_THRESHOLD = 7.0
 
 SANITY_DIGIT_DIFF_THRESHOLD = 3
 SANITY_PERCENT_WARN_THRESHOLD = 50.0
@@ -596,13 +590,13 @@ def scrape_homepage_data():
             if item.get("_time_diff_min") is not None and item["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES
         ]
 
-# استخراج عناوین یکتا از نمادهای قدیمی برای نمایش در لاگ
+        # استخراج عناوین یکتا از نمادهای قدیمی برای نمایش در لاگ
         stale_names = list(dict.fromkeys([item.get('title_fa') or item.get('symbol_key') for item in stale_items]))
         stale_str = " | ".join(stale_names)
 
         if stale_items and attempt < MAX_SCRAPE_RETRIES:
             print(
-                f"⚠️️ برخی داده‌ها ({len(stale_items)} نماد: {stale_str}) فاصله زمانی نامتعارف با تایم تهران دارند "
+                f"⚠ برخی داده‌ها ({len(stale_items)} نماد: {stale_str}) فاصله زمانی نامتعارف با تایم تهران دارند "
                 f"(بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه). احتمال فچ نشدن کامل داده‌ها؛ {RETRY_WAIT_SECONDS} ثانیه شکیبایی جهت بروزرسانی...",
                 flush=True
             )
@@ -690,90 +684,6 @@ def find_value_for_label(soup, labels):
             if any(lbl in label_txt for lbl in labels):
                 return get_cell_text(spans[1])
     return None
-
-
-def fetch_profile_price(url: str, symbol_key: str = None, is_toman: bool = False, usd_price_toman: float = None):
-    """
-    لایه حفاظتی دوم با اعمال قواعد اختصاصی برای استخراج قیمت ریالی بیت‌کوین.
-    """
-    try:
-        html = fetch_rendered_html(url, extra_wait=2.0)
-        if not html:
-            return None
-        soup = BeautifulSoup(html, "html.parser")
-
-        price_str, price_num = None, None
-
-        if symbol_key == "btc":
-            # --- بخش انحصاری بیت‌کوین ---
-            def is_rial_label(text):
-                text = text.replace("ي", "ی").replace("ك", "ک")
-                text = re.sub(r'\s+', '', text)
-                pattern = r'(قیمت|نرخ|ارزش).*(ریال|ریالی)'
-                return bool(re.search(pattern, text))
-
-            found = False
-            
-            # جستجو در جداول
-            for row in soup.find_all("tr"):
-                cells = row.find_all(["th", "td"])
-                if len(cells) >= 2:
-                    for i, c in enumerate(cells):
-                        if is_rial_label(get_cell_text(c)):
-                            val_text = get_cell_text(cells[i + 1]) if i + 1 < len(cells) else get_cell_text(cells[i - 1])
-                            p_str, p_num = parse_price_value(val_text, is_index=False)
-                            
-                            # اعتبارسنجی مقداری: باید بالای ۱۰۰ میلیون باشد (رد قیمت دلاری)
-                            if p_num and p_num >= 100_000_000:
-                                price_str, price_num = p_str, p_num
-                                found = True
-                                break
-                if found: break
-
-            # جستجو در لیست‌ها (در صورت پیدا نشدن در جداول)
-            if not found:
-                for item in soup.select("li, div"):
-                    spans = item.find_all(["span", "div", "td"], recursive=False)
-                    if len(spans) >= 2:
-                        if is_rial_label(get_cell_text(spans[0])):
-                            p_str, p_num = parse_price_value(get_cell_text(spans[1]), is_index=False)
-                            if p_num and p_num >= 100_000_000:
-                                price_str, price_num = p_str, p_num
-                                found = True
-                                break
-
-            # فرمول پشتیبان محاسباتی در صورت حذف شدن سطر قیمت ریالی از سایت
-            if not found and usd_price_toman and usd_price_toman > 0:
-                raw_usd_btc = find_value_for_label(soup, ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای", "آخرین قیمت"])
-                if raw_usd_btc:
-                    _, usd_btc_num = parse_price_value(raw_usd_btc, is_index=False)
-                    # اطمینان از اینکه عددِ پیدا شده قطعاً دلاری است (مثلاً زیر ۱۰۰ میلیون)
-                    if usd_btc_num and usd_btc_num < 100_000_000:
-                        usd_price_rial = usd_price_toman * 10
-                        price_num = usd_btc_num * usd_price_rial
-                        price_str = format_number_with_comma(price_num)
-
-            if not price_num:
-                return None
-
-        else:
-            # --- رفتار پیش‌فرض برای سایر نمادها ---
-            raw_price = find_value_for_label(soup, ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای", "آخرین قیمت"])
-            if raw_price is None:
-                return None
-            price_str, price_num = parse_price_value(raw_price, is_index=False)
-            if price_num is None:
-                return None
-
-        if is_toman:
-            price_num = price_num / 10
-            price_str = format_number_with_comma(price_num)
-            
-        return price_str, price_num
-
-    except Exception as e:
-        print(f"⚠️ خطا در خواندن صفحه اختصاصی ({url}) برای لایه حفاظتی دوم: {e}", flush=True)
-        return None
 
 
 def fetch_bourse_total_index():
@@ -914,51 +824,17 @@ def update_database(data_list):
                 "updated_at": row[6],
             }
     except Exception as e:
-        print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌‌یابد.", flush=True)
+        print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
 
     accepted = []
     rejected_anomalies = []
-
-    # استخراج قیمت روز دلار (تومانی) برای استفاده در فرمول پشتیبان بیت‌کوین
-    usd_price_toman = None
-    for item in data_list:
-        if item["symbol_key"] == "usd":
-            usd_price_toman = _to_float(item["price"])
-            break
 
     for item in data_list:
         old = existing_rows.get(item["symbol_key"])
         old_val = _to_float(old["price"]) if old else None
         new_val = _to_float(item["price"])
 
-        used_profile_source = False
-        if item["symbol_key"] in PROFILE_FALLBACK_URLS:
-            fallback = fetch_profile_price(
-                PROFILE_FALLBACK_URLS[item["symbol_key"]],
-                symbol_key=item["symbol_key"],
-                is_toman=(item["symbol_key"] in TOMAN_SYMBOLS),
-                usd_price_toman=usd_price_toman
-            )
-            if fallback:
-                fb_price_str, fb_price_num = fallback
-                if item["price"] != fb_price_str:
-                    print(
-                        f"ℹ️ {item['symbol_key']} ({item['title_fa']}): مقدار صفحهٔ اصلی "
-                        f"({item['price']}) با صفحهٔ اختصاصی ({fb_price_str}) فرق داشت - "
-                        f"طبق اولویت، مقدار صفحهٔ اختصاصی ثبت شد.",
-                        flush=True,
-                    )
-                item["price"] = fb_price_str
-                new_val = fb_price_num
-                used_profile_source = True
-            else:
-                print(
-                    f"⚠️ {item['symbol_key']}: صفحهٔ اختصاصی در دسترس نبود؛ از مقدار صفحهٔ "
-                    f"اصلی + قوانین صحت‌سنجی معمول استفاده می‌شود.",
-                    flush=True,
-                )
-
-        if not used_profile_source and old_val is not None and new_val is not None and old_val != 0:
+        if old_val is not None and new_val is not None and old_val != 0:
             old_digits, new_digits = _digit_count(old_val), _digit_count(new_val)
             if abs(old_digits - new_digits) >= SANITY_DIGIT_DIFF_THRESHOLD:
                 rejected_anomalies.append({
