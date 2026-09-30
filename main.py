@@ -2,6 +2,7 @@ import os
 import re
 import json
 import sqlite3
+import time
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
@@ -90,7 +91,7 @@ SYMBOL_MAP = {
     "منات ترکمنستان": ["tmt"],
 
     # ارزهای دیجیتال (فقط قیمت ریالی)
-    "بیت‌‌کوین": ["btc"],
+    "بیت‌‌‌‌کوین": ["btc"],
     "بیت کوین": ["btc"],
     "اتریوم": ["eth"],
     "تتر": ["usdt"],
@@ -209,12 +210,8 @@ FREE_MARKET_CURRENCY_KEYS = {
     "sek", "sgd", "syp", "thb", "tjs", "tmt",
 }
 
+# حذف لایه پشتیبان برای دلار، یورو، طلا، سکه و نقره؛ فقط بیت‌کوین حفظ شده است
 PROFILE_FALLBACK_URLS = {
-    "usd": "https://www.tgju.org/profile/price_dollar_rl",
-    "eur": "https://www.tgju.org/profile/price_eur",
-    "gold_18k": "https://www.tgju.org/profile/geram18",
-    "coin_emami": "https://www.tgju.org/profile/sekee",
-    "silver_gram": "https://www.tgju.org/profile/silver_999",
     "btc": "https://www.tgju.org/profile/crypto-bitcoin",
 }
 PROFILE_FALLBACK_PERCENT_THRESHOLD = 7.0
@@ -398,152 +395,230 @@ def is_real_data_table(table, header_cells) -> bool:
     has_change_col = "تغییر" in header_text
     return has_price_col and has_change_col
 
-def scrape_homepage_data():
-    print("در حال دریافت داده‌ها از tgju.org ...", flush=True)
-    scraped_data = []
-    sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
-    tehran_tz = pytz.timezone('Asia/Tehran')
-    updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
+def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> float | None:
+    """محاسبه اختلاف زمانی به دقیقه بین زمان درج‌شده در جدول و زمان جاری تهران"""
+    if not raw_time_str:
+        return None
+    text = to_english_digits(raw_time_str).strip()
+    if not text or text == "-":
+        return None
 
+    if any(kw in text for kw in ["همین الان", "چند ثانیه", "دقایقی"]):
+        return 0.0
+
+    m_rel = re.search(r'(\d+)\s*دقیقه', text)
+    if m_rel:
+        return float(m_rel.group(1))
+
+    h_rel = re.search(r'(\d+)\s*ساعت', text)
+    if h_rel:
+        return float(h_rel.group(1)) * 60.0
+
+    time_match = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', text)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+        second = int(time_match.group(3)) if time_match.group(3) else 0
+
+        if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59:
+            row_dt = tehran_now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+            diff_sec = (tehran_now - row_dt).total_seconds()
+            if diff_sec < -3600 * 12:
+                diff_sec += 86400
+            elif diff_sec > 3600 * 12:
+                diff_sec -= 86400
+            return abs(diff_sec) / 60.0
+
+    return None
+
+def scrape_homepage_data():
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    MAX_SCRAPE_RETRIES = 3
+    RETRY_WAIT_SECONDS = 5.0
+    MAX_ACCEPTABLE_TIME_DIFF_MINUTES = 45.0  # آستانه فاصله زمانی نامتعارف (۴۵ دقیقه)
+
+    sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
+    FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
+    OFFICIAL_RATE_LABELS = ("نیمایی", "مبادله")
+    TIME_HEADER_PATTERNS = ["زمان", "ساعت", "تاریخ", "تایم", "بروزرسانی", "زمان بروزرسانی"]
+
+    def _currency_table_affinity(tbl):
+        score = 0
+        node, depth = tbl, 0
+        while node is not None and depth < 6:
+            attrs = getattr(node, "attrs", None)
+            if attrs:
+                blob = " ".join(
+                    v if isinstance(v, str) else " ".join(v)
+                    for v in attrs.values()
+                )
+                if any(lbl in blob for lbl in FREE_MARKET_LABELS):
+                    score += 10
+                if any(lbl in blob for lbl in OFFICIAL_RATE_LABELS):
+                    score -= 10
+            node = getattr(node, "parent", None)
+            depth += 1
+        return score
+
+    scraped_data = []
     seen_header_texts = []
     unrecognized_titles = set()
 
-    try:
-        html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0)
-        if html:
-            soup = BeautifulSoup(html, "html.parser")
+    for attempt in range(1, MAX_SCRAPE_RETRIES + 1):
+        print(f"در حال دریافت داده‌ها از tgju.org (تلاش {attempt} از {MAX_SCRAPE_RETRIES}) ...", flush=True)
+        tehran_now = datetime.now(tehran_tz)
+        updated_at = tehran_now.strftime("%Y-%m-%d %H:%M:%S")
 
-            FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
-            OFFICIAL_RATE_LABELS = ("نیمایی", "مبادله")
+        scraped_data.clear()
+        seen_header_texts.clear()
+        unrecognized_titles.clear()
 
-            def _currency_table_affinity(tbl):
-                score = 0
-                node, depth = tbl, 0
-                while node is not None and depth < 6:
-                    attrs = getattr(node, "attrs", None)
-                    if attrs:
-                        blob = " ".join(
-                            v if isinstance(v, str) else " ".join(v)
-                            for v in attrs.values()
-                        )
-                        if any(lbl in blob for lbl in FREE_MARKET_LABELS):
-                            score += 10
-                        if any(lbl in blob for lbl in OFFICIAL_RATE_LABELS):
-                            score -= 10
-                    node = getattr(node, "parent", None)
-                    depth += 1
-                return score
+        try:
+            html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0 * attempt)
+            if html:
+                soup = BeautifulSoup(html, "html.parser")
 
-            for table in soup.find_all("table"):
-                price_col_idx, change_col_idx = 1, 2
-                header_tr = table.find("tr")
-                header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
-                table_currency_affinity = _currency_table_affinity(table)
+                for table in soup.find_all("table"):
+                    price_col_idx, change_col_idx = 1, 2
+                    header_tr = table.find("tr")
+                    header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+                    table_currency_affinity = _currency_table_affinity(table)
 
-                seen_header_texts.append(" ".join(get_cell_text(c) for c in header_cells))
+                    seen_header_texts.append(" ".join(get_cell_text(c) for c in header_cells))
 
-                if not is_real_data_table(table, header_cells):
-                    continue
-
-                for idx, c in enumerate(header_cells):
-                    if idx == 0:
-                        continue
-                    c_txt = get_cell_text(c)
-                    if "ارزش" in c_txt:
-                        price_col_idx = idx
-                    elif any(k in c_txt for k in ["قیمت", "قیمت زنده", "قیمت (ریال)"]) and price_col_idx == 1:
-                        price_col_idx = idx
-                    elif "تغییر" in c_txt:
-                        change_col_idx = idx
-
-                for row in table.find_all("tr"):
-                    cols = row.find_all(["td", "th"])
-                    if not cols or len(cols) < 2:
+                    if not is_real_data_table(table, header_cells):
                         continue
 
-                    row_title = clean_title(get_cell_text(cols[0]))
+                    time_col_idx = find_header_col(header_cells, TIME_HEADER_PATTERNS)
 
-                    matched_fa = next(
-                        (t for t in sorted_targets if clean_title(t) == row_title),
-                        None
-                    )
-                    if not matched_fa and "/" not in row_title:
+                    for idx, c in enumerate(header_cells):
+                        if idx == 0:
+                            continue
+                        c_txt = get_cell_text(c)
+                        if "ارزش" in c_txt:
+                            price_col_idx = idx
+                        elif any(k in c_txt for k in ["قیمت", "قیمت زنده", "قیمت (ریال)"]) and price_col_idx == 1:
+                            price_col_idx = idx
+                        elif "تغییر" in c_txt:
+                            change_col_idx = idx
+
+                    for row in table.find_all("tr"):
+                        cols = row.find_all(["td", "th"])
+                        if not cols or len(cols) < 2:
+                            continue
+
+                        row_title = clean_title(get_cell_text(cols[0]))
+
                         matched_fa = next(
-                            (t for t in sorted_targets if clean_title(t) in row_title),
+                            (t for t in sorted_targets if clean_title(t) == row_title),
                             None
                         )
+                        if not matched_fa and "/" not in row_title:
+                            matched_fa = next(
+                                (t for t in sorted_targets if clean_title(t) in row_title),
+                                None
+                            )
 
-                    if not matched_fa and row is not header_tr and "/" not in row_title and len(row_title) >= 2:
-                        unrecognized_titles.add(row_title)
+                        if not matched_fa and row is not header_tr and "/" not in row_title and len(row_title) >= 2:
+                            unrecognized_titles.add(row_title)
 
-                    if matched_fa:
-                        symbol_keys = SYMBOL_MAP[matched_fa]
-                        primary_key = symbol_keys[0]
+                        if matched_fa:
+                            symbol_keys = SYMBOL_MAP[matched_fa]
+                            primary_key = symbol_keys[0]
 
-                        price_cell = cols[price_col_idx] if len(cols) > price_col_idx else cols[1]
-                        
-                        if primary_key in CRYPTO and len(cols) >= 3:
-                            price_cell = cols[1]
-                        elif primary_key in COMMODITIES:
-                            usd_col = find_header_col(header_cells, ["قیمت/دلار", "قیمت ($)", "قیمت$"])
-                            if usd_col != -1 and usd_col < len(cols):
-                                price_cell = cols[usd_col]
-                            else:
-                                for c in cols[1:]:
-                                    c_txt = get_cell_text(c)
-                                    if "$" in c_txt or "دلار" in c_txt:
-                                        price_cell = c
-                                        break
-                        elif primary_key in INDICES:
-                            value_col = find_header_col(header_cells, ["ارزش"])
-                            if value_col != -1 and value_col < len(cols):
-                                price_cell = cols[value_col]
-                            else:
-                                found_val = False
-                                for idx, c in enumerate(cols):
-                                    c_text = get_cell_text(c)
-                                    if c_text and c_text != "-" and any(char.isdigit() for char in c_text):
-                                        h_text = get_cell_text(header_cells[idx]) if idx < len(header_cells) else ""
-                                        if "ارزش" in h_text or "قیمت" in h_text or idx == price_col_idx:
+                            price_cell = cols[price_col_idx] if len(cols) > price_col_idx else cols[1]
+                            
+                            if primary_key in CRYPTO and len(cols) >= 3:
+                                price_cell = cols[1]
+                            elif primary_key in COMMODITIES:
+                                usd_col = find_header_col(header_cells, ["قیمت/دلار", "قیمت ($)", "قیمت$"])
+                                if usd_col != -1 and usd_col < len(cols):
+                                    price_cell = cols[usd_col]
+                                else:
+                                    for c in cols[1:]:
+                                        c_txt = get_cell_text(c)
+                                        if "$" in c_txt or "دلار" in c_txt:
                                             price_cell = c
-                                            found_val = True
                                             break
-                                if not found_val and len(cols) > price_col_idx:
-                                    price_cell = cols[price_col_idx]
+                            elif primary_key in INDICES:
+                                value_col = find_header_col(header_cells, ["ارزش"])
+                                if value_col != -1 and value_col < len(cols):
+                                    price_cell = cols[value_col]
+                                else:
+                                    found_val = False
+                                    for idx, c in enumerate(cols):
+                                        c_text = get_cell_text(c)
+                                        if c_text and c_text != "-" and any(char.isdigit() for char in c_text):
+                                            h_text = get_cell_text(header_cells[idx]) if idx < len(header_cells) else ""
+                                            if "ارزش" in h_text or "قیمت" in h_text or idx == price_col_idx:
+                                                price_cell = c
+                                                found_val = True
+                                                break
+                                    if not found_val and len(cols) > price_col_idx:
+                                        price_cell = cols[price_col_idx]
 
-                        price_str, price_num = parse_price_value(get_cell_text(price_cell), is_index=(primary_key in INDICES))
-                        
-                        change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
-                        change_amt, change_pct, change_num = parse_changes(change_cell, price_num)
+                            price_str, price_num = parse_price_value(get_cell_text(price_cell), is_index=(primary_key in INDICES))
+                            
+                            change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
+                            change_amt, change_pct, change_num = parse_changes(change_cell, price_num)
 
-                        # تبدیل قیمت از ریال به تومان برای نمادهای مشخص‌شده
-                        if primary_key in TOMAN_SYMBOLS and price_num:
-                            price_num = price_num / 10
-                            price_str = format_number_with_comma(price_num)
+                            # استخراج زمان و محاسبه فاصله با زمان تهران
+                            raw_row_time = get_cell_text(cols[time_col_idx]) if (time_col_idx != -1 and len(cols) > time_col_idx) else ""
+                            time_diff_min = parse_row_time_diff_minutes(raw_row_time, tehran_now)
 
-                        display_title = "نفت اوپک" if primary_key == "oil_opec" else matched_fa
+                            # تبدیل قیمت از ریال به تومان برای نمادهای مشخص‌شده
+                            if primary_key in TOMAN_SYMBOLS and price_num:
+                                price_num = price_num / 10
+                                price_str = format_number_with_comma(price_num)
 
-                        for skey in symbol_keys:
-                            scraped_data.append({
-                                "symbol_key": skey,
-                                "title_fa": display_title,
-                                "price": price_str,
-                                "unit": get_unit(skey),
-                                "price_num": price_num,
-                                "change_amount": change_amt,
-                                "change_percent": change_pct,
-                                "change_num": change_num,
-                                "updated_at": updated_at,
-                                "_affinity": table_currency_affinity,
-                            })
-    except Exception as e:
-        print(f"خطا در استخراج: {e}", flush=True)
+                            display_title = "نفت اوپک" if primary_key == "oil_opec" else matched_fa
+
+                            for skey in symbol_keys:
+                                scraped_data.append({
+                                    "symbol_key": skey,
+                                    "title_fa": display_title,
+                                    "price": price_str,
+                                    "unit": get_unit(skey),
+                                    "price_num": price_num,
+                                    "change_amount": change_amt,
+                                    "change_percent": change_pct,
+                                    "change_num": change_num,
+                                    "updated_at": updated_at,
+                                    "_affinity": table_currency_affinity,
+                                    "_time_diff_min": time_diff_min
+                                })
+        except Exception as e:
+            print(f"خطا در استخراج (تلاش {attempt}): {e}", flush=True)
+
+        # اعتبارسنجی فاصله زمانی داده‌ها
+        stale_items = [
+            item for item in scraped_data 
+            if item.get("_time_diff_min") is not None and item["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES
+        ]
+
+        if stale_items and attempt < MAX_SCRAPE_RETRIES:
+            print(
+                f"⚠️ برخی داده‌ها ({len(stale_items)} نماد) فاصله زمانی نامتعارف با تایم تهران دارند "
+                f"(بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه). احتمال فچ نشدن کامل داده‌ها؛ {RETRY_WAIT_SECONDS} ثانیه شکیبایی جهت بروزرسانی...",
+                flush=True
+            )
+            time.sleep(RETRY_WAIT_SECONDS)
+            continue
+        else:
+            if stale_items:
+                print(
+                    f"ℹ️ پس از {MAX_SCRAPE_RETRIES} تلاش، همچنان {len(stale_items)} نماد دارای فاصله زمانی بیش از {MAX_ACCEPTABLE_TIME_DIFF_MINUTES} دقیقه بودند "
+                    f"(احتمال تعطیلی بازار یا ثبات قیمت). داده‌های فعلی ثبت می‌شوند.",
+                    flush=True
+                )
+            break
 
     unique_data = {}
     best_affinity = {}
     for item in scraped_data:
         key = item["symbol_key"]
         affinity = item.pop("_affinity", 0)
+        item.pop("_time_diff_min", None)
         if key not in unique_data:
             unique_data[key] = item
             best_affinity[key] = affinity
@@ -835,7 +910,7 @@ def update_database(data_list):
                 "updated_at": row[6],
             }
     except Exception as e:
-        print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
+        print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌‌یابد.", flush=True)
 
     accepted = []
     rejected_anomalies = []
