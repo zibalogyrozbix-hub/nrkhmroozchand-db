@@ -90,7 +90,7 @@ SYMBOL_MAP = {
     "منات ترکمنستان": ["tmt"],
 
     # ارزهای دیجیتال (فقط قیمت ریالی)
-    "بیت‌کوین": ["btc"],
+    "بیت‌‌کوین": ["btc"],
     "بیت کوین": ["btc"],
     "اتریوم": ["eth"],
     "تتر": ["usdt"],
@@ -198,9 +198,6 @@ def get_unit(symbol_key: str) -> str:
         return "واحد"
     return ""
 
-# نمادهای ارز آزاد ایران (برای محدودسازی جدول‌گزینی؛ پایین‌تر در
-# scrape_homepage_data توضیح داده شده - همان مجموعه ارزهای سنتی داخل
-# TOMAN_SYMBOLS، بدون طلا/سکه/رمزارز/صندوق‌ها)
 FREE_MARKET_CURRENCY_KEYS = {
     "usd", "eur", "aed", "gbp", "try", "chf", "cny", "jpy", "krw", "cad",
     "aud", "afn", "amd", "azn", "bhd", "dkk", "gel", "hkd", "inr", "iqd",
@@ -208,9 +205,6 @@ FREE_MARKET_CURRENCY_KEYS = {
     "sek", "sgd", "syp", "thb", "tjs", "tmt",
 }
 
-# نمادهای پرریسک که برای آن‌ها یک صفحه اختصاصی مجزا وجود دارد؛ اگر عدد
-# استخراج‌شده از صفحه اصلی خیلی با آخرین مقدار معتبر فرق کند، به‌عنوان لایه
-# دوم صحت‌سنجی، این صفحه به‌طور مستقل چک می‌شود (به update_database نگاه کنید).
 PROFILE_FALLBACK_URLS = {
     "usd": "https://www.tgju.org/profile/price_dollar_rl",
     "eur": "https://www.tgju.org/profile/price_eur",
@@ -286,7 +280,7 @@ def to_english_digits(text: str) -> str:
         return ""
     text = text.replace('−', '-').replace('–', '-').replace(',', '').replace('،', '')
     persian_digits = "۰۱۲۳۴۵۶۷۸۹"
-    arabic_digits = "٠١٢٣٤٥٦٧۸۹"
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
     english_digits = "0123456789"
     translation = str.maketrans(persian_digits + arabic_digits, english_digits * 2)
     return text.translate(translation)
@@ -414,22 +408,6 @@ def scrape_homepage_data():
         if html:
             soup = BeautifulSoup(html, "html.parser")
 
-            # --- ریشهٔ باگ «دلار = 85,840 به‌جای 233,500» ---
-            # صفحه اصلی چند تب ارز دارد: «ارز آزاد» (بازار واقعی - همینو
-            # می‌خواهیم)، و همچنین «ارز نیمایی»/«ارز مبادله‌ای» (نرخ‌های رسمی/
-            # صادراتی) و جدول‌های مشابه کشورهای دیگر (افغانستان، ترکیه، ...).
-            # همهٔ این‌ها می‌توانند یک ردیف دقیقاً به اسم «دلار» داشته باشند، با
-            # عددی کاملاً متفاوت. تلاش قبلی برای محدودسازی از طریق
-            # id="currency-overview-content" کار نکرد (این id هیچ‌وقت روی
-            # صفحهٔ واقعی پیدا نشد - لاگ‌های اجراهای واقعی این را ثابت کردند).
-            # روش جدید: به‌جای گیر دادن به یک id ثابت، برای هر جدول، عبارت
-            # تب/برچسبش را در attributeهای خودش و اجدادش (تا عمق ۶) می‌گردیم؛
-            # اگر «ارز آزاد»/«ارز ازاد» دیدیم امتیاز مثبت، اگر «نیمایی» یا
-            # «مبادله» دیدیم امتیاز منفی می‌دهیم. در پایان (در مرحلهٔ dedup)،
-            # برای نمادهای ارزی، جدولی که امتیاز بالاتر دارد برنده می‌شود - نه
-            # صرفاً هرکدام که زودتر در HTML ظاهر شده. اگر هیچ‌کدام امتیاز
-            # نداشتند (سایت باز هم تغییر کرد)، رفتار به حالت قبلی (اولین مورد
-            # معتبر) برمی‌گردد - یعنی این روش هرگز چیزی را بدتر از قبل نمی‌کند.
             FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
             OFFICIAL_RATE_LABELS = ("نیمایی", "مبادله")
 
@@ -535,12 +513,8 @@ def scrape_homepage_data():
 
                         # تبدیل قیمت از ریال به تومان برای نمادهای مشخص‌شده
                         if primary_key in TOMAN_SYMBOLS and price_num:
-                            if primary_key in CRYPTO:
-                                # قیمت رمزارزها در TGJU بر حسب دلار است، بنابراین تقسیم بر ۱۰ نمی‌شود
-                                price_str = format_number_with_comma(price_num)
-                            else:
-                                price_num = price_num / 10
-                                price_str = format_number_with_comma(price_num)
+                            price_num = price_num / 10
+                            price_str = format_number_with_comma(price_num)
 
                         display_title = matched_fa
 
@@ -560,10 +534,6 @@ def scrape_homepage_data():
     except Exception as e:
         print(f"خطا در استخراج: {e}", flush=True)
 
-    # ساخت دیتای یکتا: به‌طور پیش‌فرض «اولین match معتبر» برنده است (رفتار
-    # قدیمی). اما برای نمادهای ارز آزاد (FREE_MARKET_CURRENCY_KEYS)، بین همهٔ
-    # جدول‌های match‌شده، جدولی که امتیاز تب بالاتری دارد (واقعاً «ارز آزاد»
-    # است، نه «نیمایی»/«مبادله‌ای»/جدول یک کشور دیگر) برنده می‌شود.
     unique_data = {}
     best_affinity = {}
     for item in scraped_data:
@@ -579,18 +549,13 @@ def scrape_homepage_data():
         elif unique_data[key]["price"] == "-":
             unique_data[key] = item
 
-    # ضرب مقدار قیمت و تغییرات رمزارزها در نرخ تومانی دلار
+    # ضرب مقدار تغییرات رمزارزها در نرخ تومانی دلار
     usd_item = unique_data.get("usd")
     usd_price_toman = _to_float(usd_item["price"]) if usd_item else None
 
     if usd_price_toman and usd_price_toman > 0:
         for item in unique_data.values():
             if item["symbol_key"] in CRYPTO:
-                raw_price = item.get("price_num", 0.0)
-                if raw_price and item["symbol_key"] in TOMAN_SYMBOLS:
-                    toman_price = raw_price * usd_price_toman
-                    item["price"] = format_number_with_comma(toman_price)
-
                 raw_change = item.get("change_num", 0.0)
                 if raw_change != 0:
                     toman_change = raw_change * usd_price_toman
@@ -621,10 +586,7 @@ def scrape_homepage_data():
 def find_value_for_label(soup, labels):
     """
     جست‌وجوی مقدار مقابل یک برچسب (مثلا «نرخ فعلی») در جدول‌های اطلاعات
-    یک صفحه اختصاصی (profile) تک‌دارایی. قبلاً این تابع فقط داخل
-    fetch_bourse_total_index تعریف شده بود؛ چون حالا fetch_profile_price هم
-    (پایین‌تر) به همین منطق نیاز دارد، به یک تابع مستقل و قابل استفادهٔ
-    مجدد تبدیل شد - بدون هیچ تغییری در نحوهٔ کارش.
+    یک صفحه اختصاصی (profile) تک‌دارایی.
     """
     for row in soup.find_all("tr"):
         cells = row.find_all(["th", "td"])
@@ -646,32 +608,85 @@ def find_value_for_label(soup, labels):
     return None
 
 
-def fetch_profile_price(url: str, is_toman: bool = False, usd_price_toman: float | None = None, is_crypto: bool = False):
+def fetch_profile_price(url: str, symbol_key: str = None, is_toman: bool = False, usd_price_toman: float = None):
     """
-    لایهٔ حفاظتی دوم برای دارایی‌های پرریسک (PROFILE_FALLBACK_URLS). چون این
-    صفحات فقط یک دارایی را نشان می‌دهند (نه یک جدول بزرگ با چندین ردیف
-    هم‌نام مثل صفحهٔ اصلی)، عملاً همان ریسک تداخل نامی که باعث باگ دلار شد
-    اینجا وجود ندارد؛ برای همین به‌عنوان داور مستقل استفاده می‌شود.
-    خروجی: تاپل (price_str, price_num) یا None اگر چیزی پیدا نشد/خطا داد.
+    لایه حفاظتی دوم با اعمال قواعد اختصاصی برای استخراج قیمت ریالی بیت‌کوین.
     """
     try:
         html = fetch_rendered_html(url, extra_wait=2.0)
         if not html:
             return None
         soup = BeautifulSoup(html, "html.parser")
-        raw_price = find_value_for_label(soup, ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای", "آخرین قیمت"])
-        if raw_price is None:
-            return None
-        price_str, price_num = parse_price_value(raw_price, is_index=False)
-        if price_num is None:
-            return None
-        if is_crypto and usd_price_toman and is_toman:
-            price_num = price_num * usd_price_toman
-            price_str = format_number_with_comma(price_num)
-        elif is_toman:
+
+        price_str, price_num = None, None
+
+        if symbol_key == "btc":
+            # --- بخش انحصاری بیت‌کوین ---
+            def is_rial_label(text):
+                text = text.replace("ي", "ی").replace("ك", "ک")
+                text = re.sub(r'\s+', '', text)
+                pattern = r'(قیمت|نرخ|ارزش).*(ریال|ریالی)'
+                return bool(re.search(pattern, text))
+
+            found = False
+            
+            # جستجو در جداول
+            for row in soup.find_all("tr"):
+                cells = row.find_all(["th", "td"])
+                if len(cells) >= 2:
+                    for i, c in enumerate(cells):
+                        if is_rial_label(get_cell_text(c)):
+                            val_text = get_cell_text(cells[i + 1]) if i + 1 < len(cells) else get_cell_text(cells[i - 1])
+                            p_str, p_num = parse_price_value(val_text, is_index=False)
+                            
+                            # اعتبارسنجی مقداری: باید بالای ۱۰۰ میلیون باشد (رد قیمت دلاری)
+                            if p_num and p_num >= 100_000_000:
+                                price_str, price_num = p_str, p_num
+                                found = True
+                                break
+                if found: break
+
+            # جستجو در لیست‌ها (در صورت پیدا نشدن در جداول)
+            if not found:
+                for item in soup.select("li, div"):
+                    spans = item.find_all(["span", "div", "td"], recursive=False)
+                    if len(spans) >= 2:
+                        if is_rial_label(get_cell_text(spans[0])):
+                            p_str, p_num = parse_price_value(get_cell_text(spans[1]), is_index=False)
+                            if p_num and p_num >= 100_000_000:
+                                price_str, price_num = p_str, p_num
+                                found = True
+                                break
+
+            # فرمول پشتیبان محاسباتی در صورت حذف شدن سطر قیمت ریالی از سایت
+            if not found and usd_price_toman and usd_price_toman > 0:
+                raw_usd_btc = find_value_for_label(soup, ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای", "آخرین قیمت"])
+                if raw_usd_btc:
+                    _, usd_btc_num = parse_price_value(raw_usd_btc, is_index=False)
+                    # اطمینان از اینکه عددِ پیدا شده قطعاً دلاری است (مثلاً زیر ۱۰۰ میلیون)
+                    if usd_btc_num and usd_btc_num < 100_000_000:
+                        usd_price_rial = usd_price_toman * 10
+                        price_num = usd_btc_num * usd_price_rial
+                        price_str = format_number_with_comma(price_num)
+
+            if not price_num:
+                return None
+
+        else:
+            # --- رفتار پیش‌فرض برای سایر نمادها ---
+            raw_price = find_value_for_label(soup, ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای", "آخرین قیمت"])
+            if raw_price is None:
+                return None
+            price_str, price_num = parse_price_value(raw_price, is_index=False)
+            if price_num is None:
+                return None
+
+        if is_toman:
             price_num = price_num / 10
             price_str = format_number_with_comma(price_num)
+            
         return price_str, price_num
+
     except Exception as e:
         print(f"⚠️ خطا در خواندن صفحه اختصاصی ({url}) برای لایه حفاظتی دوم: {e}", flush=True)
         return None
@@ -820,36 +835,72 @@ def update_database(data_list):
     accepted = []
     rejected_anomalies = []
 
+    # استخراج قیمت روز دلار (تومانی) برای استفاده در فرمول پشتیبان بیت‌کوین
+    usd_price_toman = None
+    for item in data_list:
+        if item["symbol_key"] == "usd":
+            usd_price_toman = _to_float(item["price"])
+            break
+
     for item in data_list:
         old = existing_rows.get(item["symbol_key"])
         old_val = _to_float(old["price"]) if old else None
         new_val = _to_float(item["price"])
 
-        # بررسی صحت‌سنجی (Sanity Check) و فال‌بک به صفحه اختصاصی (Profile Fallback)
-        if item["symbol_key"] in PROFILE_FALLBACK_URLS and old_val and new_val:
-            digit_diff = abs(_digit_count(new_val) - _digit_count(old_val))
-            pct_change = abs((new_val - old_val) / old_val) * 100
+        used_profile_source = False
+        if item["symbol_key"] in PROFILE_FALLBACK_URLS:
+            fallback = fetch_profile_price(
+                PROFILE_FALLBACK_URLS[item["symbol_key"]],
+                symbol_key=item["symbol_key"],
+                is_toman=(item["symbol_key"] in TOMAN_SYMBOLS),
+                usd_price_toman=usd_price_toman
+            )
+            if fallback:
+                fb_price_str, fb_price_num = fallback
+                if item["price"] != fb_price_str:
+                    print(
+                        f"ℹ️ {item['symbol_key']} ({item['title_fa']}): مقدار صفحهٔ اصلی "
+                        f"({item['price']}) با صفحهٔ اختصاصی ({fb_price_str}) فرق داشت - "
+                        f"طبق اولویت، مقدار صفحهٔ اختصاصی ثبت شد.",
+                        flush=True,
+                    )
+                item["price"] = fb_price_str
+                new_val = fb_price_num
+                used_profile_source = True
+            else:
+                print(
+                    f"⚠️ {item['symbol_key']}: صفحهٔ اختصاصی در دسترس نبود؛ از مقدار صفحهٔ "
+                    f"اصلی + قوانین صحت‌سنجی معمول استفاده می‌شود.",
+                    flush=True,
+                )
 
-            if digit_diff >= SANITY_DIGIT_DIFF_THRESHOLD or pct_change >= PROFILE_FALLBACK_PERCENT_THRESHOLD:
-                print(f"⚠️ تشخیص ناهنجاری برای {item['symbol_key']}: قیمت جدید {new_val} در مقایسه با قیمت قبلی {old_val} مشکوک است. بررسی صفحه اختصاصی...", flush=True)
-                fallback_url = PROFILE_FALLBACK_URLS[item["symbol_key"]]
-                is_toman = item["symbol_key"] in TOMAN_SYMBOLS
-                is_crypto = item["symbol_key"] in CRYPTO
-                
-                usd_item = next((x for x in data_list if x["symbol_key"] == "usd"), None)
-                usd_price_toman = _to_float(usd_item["price"]) if usd_item else None
+        if not used_profile_source and old_val is not None and new_val is not None and old_val != 0:
+            old_digits, new_digits = _digit_count(old_val), _digit_count(new_val)
+            if abs(old_digits - new_digits) >= SANITY_DIGIT_DIFF_THRESHOLD:
+                rejected_anomalies.append({
+                    "symbol_key": item["symbol_key"],
+                    "title_fa": item["title_fa"],
+                    "old_price": old["price"],
+                    "new_price": item["price"],
+                })
+                continue
 
-                fallback_res = fetch_profile_price(fallback_url, is_toman=is_toman, usd_price_toman=usd_price_toman, is_crypto=is_crypto)
-                if fallback_res:
-                    fb_str, fb_num = fallback_res
-                    print(f"✅ قیمت اصلاح‌شده از صفحه اختصاصی برای {item['symbol_key']}: {fb_str}", flush=True)
-                    item["price"] = fb_str
+            percent_change = abs(new_val - old_val) / abs(old_val) * 100
+            if percent_change >= SANITY_PERCENT_WARN_THRESHOLD:
+                print(
+                    f"⚠️ هشدار: {item['symbol_key']} ({item['title_fa']}) با {percent_change:.0f}% تغییر کرده.",
+                    flush=True,
+                )
 
         accepted.append(item)
 
+    complete_snapshot = dict(existing_rows)
+    for item in accepted:
+        complete_snapshot[item["symbol_key"]] = item
+    write_data_json(list(complete_snapshot.values()))
+
     if conn:
         try:
-            cursor = conn.cursor()
             for item in accepted:
                 cursor.execute("""
                     INSERT INTO market_prices (symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at)
@@ -870,24 +921,66 @@ def update_database(data_list):
                     item["change_percent"],
                     item["updated_at"]
                 ))
-            conn.commit()
-            print(f"دیتابیس با موفقیت به روزرسانی شد ({len(accepted)} رکورد).", flush=True)
-        except Exception as e:
-            print(f"خطا در ثبت داده‌ها در دیتابیس: {e}", flush=True)
-        finally:
-            conn.close()
 
-    write_data_json(accepted)
-    return accepted
+            conn.commit()
+            print(f"تعداد {len(accepted)} شاخص در دیتابیس بروزرسانی شد.", flush=True)
+        except Exception as e:
+            print(f"❌ خطای دیتابیس (فایل data.json بدون مشکل تولید شد): {e}", flush=True)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    else:
+        print("ℹ️ دیتابیس در دسترس نبود اما data.json با موفقیت به‌روزرسانی شد.", flush=True)
+
+    if rejected_anomalies:
+        print(f"\n🚫 {len(rejected_anomalies)} مورد به دلیل جهش رقمی مشکوک رد شدند:", flush=True)
+        for a in rejected_anomalies:
+            print(
+                f"   - {a['symbol_key']} ({a['title_fa']}): مقدار قبلی {a['old_price']} <- مقدار جدید (رد شد) {a['new_price']}",
+                flush=True,
+            )
+
+    expected_roster = {sk for keys in SYMBOL_MAP.values() for sk in keys} | {"bourse_total"}
+    matched_roster = {item["symbol_key"] for item in accepted}
+    missing_this_run = sorted(expected_roster - matched_roster)
+    if missing_this_run:
+        print(f"\n📋 {len(missing_this_run)} نماد در این اجرا پیدا نشدند: {', '.join(missing_this_run)}", flush=True)
+
+    STALE_HOURS = 48
+    try:
+        now = datetime.now(pytz.timezone('Asia/Tehran'))
+        stale = []
+        for symbol_key, row in existing_rows.items():
+            if symbol_key in matched_roster:
+                continue
+            try:
+                last_dt = pytz.timezone('Asia/Tehran').localize(datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S"))
+                hours_old = (now - last_dt).total_seconds() / 3600
+                if hours_old >= STALE_HOURS:
+                    stale.append((symbol_key, round(hours_old)))
+            except (ValueError, TypeError):
+                continue
+        if stale:
+            stale.sort(key=lambda x: -x[1])
+            print(f"\n⏰ این نمادها بیش از {STALE_HOURS} ساعت است بروزرسانی نشده‌اند (به‌احتمال زیاد الگوی match‌شان خراب شده):", flush=True)
+            for symbol_key, hours_old in stale:
+                print(f"   - {symbol_key}: {hours_old} ساعت قدیمی", flush=True)
+    except Exception as e:
+        print(f"هشدار: محاسبهٔ گزارش داده‌های قدیمی ممکن نشد: {e}", flush=True)
 
 if __name__ == "__main__":
-    homepage_data = scrape_homepage_data()
-    
-    bourse_data = fetch_bourse_total_index()
-    if bourse_data:
-        homepage_data.append(bourse_data)
-        
-    if homepage_data:
-        update_database(homepage_data)
-    else:
-        print("هیچ داده‌ای دریافت نشد.", flush=True)
+    try:
+        data = scrape_homepage_data()
+
+        bourse_total_item = fetch_bourse_total_index()
+        if bourse_total_item:
+            data.append(bourse_total_item)
+
+        if data:
+            update_database(data)
+        else:
+            print("⚠️ هیچ داده‌ای در این اجرا استخراج نشد.", flush=True)
+    except Exception as e:
+        print(f"❌ خطای غیرمنتظره در اجرای اسکریپت: {e}", flush=True)
