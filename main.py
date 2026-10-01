@@ -1,67 +1,198 @@
 import os
 import re
-import sys
 import json
+import sqlite3
 import time
+from datetime import datetime
 import requests
-from datetime import datetime, time as dtime
-from zoneinfo import ZoneInfo
-import jdatetime
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+import pytz
+import jdatetime
+from playwright.sync_api import sync_playwright
 
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
-TELEGRAM_CHANNEL_ID = os.environ.get('TELEGRAM_CHANNEL_ID') or os.environ.get('CHANNEL_ID')
+try:
+    import libsql_experimental as libsql
+    HAS_LIBSQL = True
+except ImportError:
+    HAS_LIBSQL = False
 
-TEHRAN_TZ = ZoneInfo("Asia/Tehran")
-
-# --- تنظیمات اجرا (با متغیر محیطی قابل تغییر) ---
-# فایل ذخیره آخرین قیمت‌های منتشرشده برای چک معقول‌بودن
-STATE_FILE = os.environ.get("STATE_FILE", "last_market.json")
-# حداکثر تغییر مجاز نسبت به پست قبلی (۰.۱۰ = ۱۰٪)
-MAX_MOVE_RATIO = float(os.environ.get("MAX_MOVE_RATIO", "0.10"))
-# FORCE_POST=1 چک معقول‌بودن را نادیده می‌گیرد (مثلاً بعد از تعطیلات طولانی)
-FORCE_POST = os.environ.get("FORCE_POST", "").strip() == "1"
-# MARKET_CLOSED=1 پست را به‌صورت «آخرین معامله» برچسب می‌زند (برای تعطیلات رسمی)
-FORCE_MARKET_CLOSED = os.environ.get("MARKET_CLOSED", "").strip() == "1"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
+# نگاشت کامل کلیه کلیدهای اصلی و تکراری دیتابیس
 SYMBOL_MAP = {
+    # طلا، سکه و صندوق‌ها
     "سکه امامی": ["coin_emami"],
+    "سکه بهار آزادی": ["coin_azadi"],
+    "نیم سکه": ["coin_half"],
+    "ربع سکه": ["coin_quarter"],
+    "سکه گرمی": ["coin_gram"],
     "طلای ۱۸ عیار": ["gold_18k"],
+    "طلای ۲۴ عیار": ["gold_24k"],
+    "طلای دست دوم": ["gold_used"],
+    "مثقال طلا": ["gold_mesghal"],
     "انس طلا": ["gold_ounce"],
+    "گرم نقره ۹۹۹": ["silver_gram"],
+    "آبشده نقدی": ["abshedeh_cash"],
+    "آبشده معاملاتی": ["abshedeh_trade"],
+    "انس نقره": ["silver_ounce"],
+    "انس پلاتین": ["platinum_ounce"],
+    "انس پالادیوم": ["palladium_ounce"],
+    "مثقال / بدون حباب": ["mesghal_no_bubble"],
+    "مثقال بدون حباب": ["mesghal_no_bubble"],
+    "حباب سکه امامی": ["bubble_emami"],
+    "حباب سکه بهار آزادی": ["bubble_azadi"],
+    "حباب نیم سکه": ["bubble_half"],
+    "حباب ربع سکه": ["bubble_quarter"],
+    "حباب سکه گرمی": ["bubble_gram"],
+    "صندوق طلای عیار": ["fund_ayar"],
+    "صندوق طلای لوتوس": ["fund_lotus"],
+    "صندوق طلای گوهر": ["fund_gohar"],
+    "صندوق طلای مثقال": ["fund_mesghal"],
+    "صندوق طلای کهربا": ["fund_kahreba"],
+    "صندوق طلای ناب": ["fund_nab"],
+    "صندوق طلای ریتون": ["fund_riton"],
+    "صندوق طلای تابش": ["fund_tabesh"],
+    "صندوق طلای زروان": ["fund_zarvan"],
+    
+    # ارزهای سنتی
     "دلار": ["usd"],
+    "یورو": ["eur"],
+    "درهم امارات": ["aed"],
+    "پوند انگلیس": ["gbp"],
+    "لیر ترکیه": ["try"],
+    "فرانک سوئیس": ["chf"],
+    "یوان چین": ["cny"],
+    "ین ژاپن": ["jpy"],
+    "وون کره جنوبی": ["krw"],
+    "دلار کانادا": ["cad"],
+    "دلار استرالیا": ["aud"],
+    "افغانی": ["afn"],
+    "درام ارمنستان": ["amd"],
+    "منات آذربایجان": ["azn"],
+    "دینار بحرین": ["bhd"],
+    "کرون دانمارک": ["dkk"],
+    "لاری گرجستان": ["gel"],
+    "دلار هنگ‌کنگ": ["hkd"],
+    "روپیه هند": ["inr"],
+    "دینار عراق": ["iqd"],
+    "سوم قرقیزستان": ["kgs"],
+    "دینار کویت": ["kwd"],
+    "رینگیت مالزی": ["myr"],
+    "کرون نروژ": ["nok"],
+    "دلار نیوزیلند": ["nzd"],
+    "ریال عمان": ["omr"],
+    "روپیه پاکستان": ["pkr"],
+    "ریال قطر": ["qar"],
+    "روبل روسیه": ["rub"],
+    "ریال عربستان": ["sar"],
+    "کرون سوئد": ["sek"],
+    "دلار سنگاپور": ["sgd"],
+    "لیر سوریه": ["syp"],
+    "بات تایلند": ["thb"],
+    "سامانی تاجیکستان": ["tjs"],
+    "منات ترکمنستان": ["tmt"],
+
+    # ارزهای دیجیتال (فقط قیمت ریالی)
     "بیتکوین": ["btc"],
     "بیت کوین": ["btc"],
-    "نفت برنت": ["oil_brent"]
+    "اتریوم": ["eth"],
+    "تتر": ["usdt"],
+    "ترون": ["trx"],
+    "کاردانو": ["ada"],
+    "سولانا": ["sol"],
+    "دوج کوین": ["doge"],
+    "شیبا اینو": ["shib"],
+    "تون‌کوین": ["ton"],
+    "ریپل": ["xrp"],
+    "لایت‌کوین": ["ltc"],
+    "بیت‌کوین کش": ["bch"],
+    "پولکادات": ["dot"],
+    "آوالانچ": ["avax"],
+    "استلار": ["xlm"],
+    "دش": ["dash"],
+    "بایننس کوین": ["bnb"],
+
+    # کالاهای اساسی و انرژی
+    "پنبه": ["cotton"],
+    "شکر": ["sugar"],
+    "سویا": ["soybeans"],
+    "گندم": ["wheat"],
+    "ذرت": ["corn"],
+    "برنج": ["rice"],
+    "آلومینیوم": ["aluminum"],
+    "نیکل": ["nickel"],
+    "سرب": ["lead"],
+    "روی": ["zinc"],
+    "مس": ["copper"],
+    "قلع": ["tin"],
+    "نفت سبک": ["oil_crude"],
+    "نفت برنت": ["oil_brent"],
+    "نفت اوپک": ["oil_opec"],
+    "نفت اپک": ["oil_opec"],
+    "نفت اُپک": ["oil_opec"],
+    "نفت اُوپک": ["oil_opec"],
+    "سبد نفتی اوپک": ["oil_opec"],
+    "بنزین (RBOB)": ["gasoline"],
+    "گاز طبیعی": ["natural_gas"],
+    "زغال سنگ": ["coal"],
+
+    # شاخص‌های بورس و جهانی
+    "بازار اول فرابورس": ["ifb_market1"],
+    "بازار دوم فرابورس": ["ifb_market2"],
+    "شاخص بازار اول": ["bourse_market1"],
+    "شاخص بازار دوم": ["bourse_market2"],
+    "شاخص قیمت هم‌وزن": ["bourse_pequal"],
+    "شاخص قیمت وزنی ارزشی": ["bourse_pweighted"],
+    "داوجونز": ["dow_jones"],
+    "نزدک": ["nasdaq"],
+    "اس‌ام‌آی سوئیس": ["smi_swiss"],
+    "اس ام آی سوئیس": ["smi_swiss"],
+    "نیفتی ۵۰": ["nifty_50"],
+    "نیفتی 50": ["nifty_50"],
+    "فتسی بریتانیا": ["ftse_100"],
+    "دکس آلمان": ["dax"],
+    "کک فرانسه": ["cac_40"],
+    "نیکی ژاپن": ["nikkei_225"],
+    "شانگهای چین": ["shanghai_composite"],
+    "آیبکس اسپانیا": ["ibex_35"]
 }
 
-TOMAN_SYMBOLS = {"coin_emami", "gold_18k", "usd"}
-USD_UNIT_SYMBOLS = {"gold_ounce", "oil_brent", "btc"}
-UNIT_INDEX_SYMBOLS = {"bourse_total"}
+COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum", "nickel", "lead", "zinc", "copper", "tin", "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"}
+INDICES = {"bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"}
+CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
 
-# نمادهایی که بدون آن‌ها پست منتشر نمی‌شود
-REQUIRED_SYMBOLS = ["usd", "coin_emami", "gold_18k", "gold_ounce", "btc", "oil_brent", "bourse_total"]
+# نمادهایی که قیمت آن‌ها از ریال به تومان (تقسیم بر ۱۰) تبدیل می‌شود
+TOMAN_SYMBOLS = {
+    # طلا، سکه و صندوق‌ها
+    "coin_emami", "coin_azadi", "coin_half", "coin_quarter", "coin_gram",
+    "gold_18k", "gold_24k", "gold_used", "gold_mesghal", "silver_gram",
+    "abshedeh_cash", "abshedeh_trade", "mesghal_no_bubble", "bubble_emami",
+    "bubble_azadi", "bubble_half", "bubble_quarter", "bubble_gram",
+    "fund_ayar", "fund_lotus", "fund_gohar", "fund_mesghal", "fund_kahreba",
+    "fund_nab", "fund_riton", "fund_tabesh", "fund_zarvan",
 
+    # ارزهای سنتی
+    "usd", "eur", "aed", "gbp", "try", "chf", "cny", "jpy", "krw", "cad",
+    "aud", "afn", "amd", "azn", "bhd", "dkk", "gel", "hkd", "inr", "iqd",
+    "kgs", "kwd", "myr", "nok", "nzd", "omr", "pkr", "qar", "rub", "sar",
+    "sek", "sgd", "syp", "thb", "tjs", "tmt",
 
-class FatalError(Exception):
-    """خطایی که باید اجرا را با کد خروج ۱ متوقف کند."""
+    # ارزهای دیجیتال
+    "btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton",
+    "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"
+}
 
+# دسته‌بندی واحد شمارش شاخص‌ها
+USD_UNIT_SYMBOLS = {
+    "gold_ounce", "silver_ounce", "platinum_ounce", "palladium_ounce",
+    "cotton", "sugar", "soybeans", "wheat", "corn", "rice",
+    "aluminum", "nickel", "lead", "zinc", "copper", "tin",
+    "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"
+}
 
-def mask_secrets(text) -> str:
-    """توکن ربات را از هر متنی که قرار است چاپ شود حذف می‌کند."""
-    text = str(text)
-    if TELEGRAM_BOT_TOKEN:
-        text = text.replace(TELEGRAM_BOT_TOKEN, "***")
-    return re.sub(r'bot\d+:[\w-]+', 'bot***', text)
-
-
-def log(msg) -> None:
-    print(mask_secrets(msg), flush=True)
-
+UNIT_INDEX_SYMBOLS = {
+    "bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2",
+    "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss",
+    "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"
+}
 
 def get_unit(symbol_key: str) -> str:
     if symbol_key in TOMAN_SYMBOLS:
@@ -72,42 +203,56 @@ def get_unit(symbol_key: str) -> str:
         return "واحد"
     return ""
 
+FREE_MARKET_CURRENCY_KEYS = {
+    "usd", "eur", "aed", "gbp", "try", "chf", "cny", "jpy", "krw", "cad",
+    "aud", "afn", "amd", "azn", "bhd", "dkk", "gel", "hkd", "inr", "iqd",
+    "kgs", "kwd", "myr", "nok", "nzd", "omr", "pkr", "qar", "rub", "sar",
+    "sek", "sgd", "syp", "thb", "tjs", "tmt",
+}
 
-def fetch_rendered_html(url: str, wait_selector: str, extra_wait: float = 1.0, attempts: int = 2) -> str | None:
-    """
-    صفحه را رندر می‌کند و به‌جای sleep کور، منتظر ظاهر شدن خود ردیف‌های جدول می‌ماند.
-    """
-    for attempt in range(1, attempts + 1):
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                try:
-                    page = browser.new_page(user_agent=HEADERS["User-Agent"])
-                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                    try:
-                        page.wait_for_selector(wait_selector, state="attached", timeout=20000)
-                    except PlaywrightTimeoutError:
-                        log(f"⚠️ سلکتور «{wait_selector}» پیدا نشد؛ تلاش با سلکتور عمومی جدول ({url})")
-                        page.wait_for_selector("table tr td", state="attached", timeout=5000)
-                    # اگر متن «در حال بارگذاری» هنوز هست، صبر کن تا برود
-                    try:
-                        page.wait_for_function(
-                            "() => !document.body.innerText.includes('در حال بارگذاری')",
-                            timeout=8000,
-                        )
-                    except PlaywrightTimeoutError:
-                        pass
-                    page.wait_for_timeout(int(extra_wait * 1000))
-                    return page.content()
-                finally:
-                    browser.close()
-        except Exception as e:
-            log(f"❌ خطا در رندر صفحه ({url}) تلاش {attempt}/{attempts}: {e}")
-            if attempt < attempts:
-                time.sleep(2)
-    return None
+SANITY_DIGIT_DIFF_THRESHOLD = 3
+SANITY_PERCENT_WARN_THRESHOLD = 50.0
 
-_TITLE_DIGIT_TRANSLATION = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+def _to_float(price_str) -> float | None:
+    if not price_str or price_str == "-":
+        return None
+    try:
+        return float(str(price_str).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+def _digit_count(value: float) -> int:
+    return len(str(int(abs(value))))
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+def fetch_rendered_html(url: str, extra_wait: float = 3.0) -> str | None:
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(user_agent=HEADERS["User-Agent"])
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+            try:
+                loading_el = page.locator("text='در حال بارگذاری...'").first
+                loading_el.wait_for(state="detached", timeout=8000)
+            except Exception:
+                pass
+
+            page.wait_for_timeout(int(extra_wait * 1000))
+            html = page.content()
+            browser.close()
+            return html
+    except Exception as e:
+        print(f"خطا در رندر صفحه با Playwright ({url}): {e}", flush=True)
+        return None
+
+_TITLE_DIGIT_TRANSLATION = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹" + "٠١٢٣٤٥٦٧٨٩",
+    "0123456789" + "0123456789",
+)
 
 def clean_title(text: str) -> str:
     if not text:
@@ -118,7 +263,7 @@ def clean_title(text: str) -> str:
     text = text.translate(_TITLE_DIGIT_TRANSLATION)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
-
+    
 def get_cell_text(tag) -> str:
     if tag is None:
         return ""
@@ -155,7 +300,10 @@ def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float
         return "-", 0.0
 
     num_str = match.group(1)
-    val = float(num_str) if "." in num_str else int(num_str)
+    if "." not in num_str:
+        val = int(num_str)
+    else:
+        val = float(num_str)
     
     if is_index or "میلیون" in raw_text or "میلیون" in clean_text:
         if "میلیون" in raw_text:
@@ -163,67 +311,35 @@ def parse_price_value(raw_text: str, is_index: bool = False) -> tuple[str, float
     elif "هزار" in raw_text:
         val = val * 1_000
 
-    return format_number_with_comma(val), float(val)
+    return format_number_with_comma(val), val
 
-# ---------------------------------------------------------------------------
-# تشخیص جهت تغییر: فقط کلاس‌ها/رنگ‌های «دقیق» و علامت عددی؛
-# اگر چیزی قطعی نبود، نتیجه «نامشخص» (None) است، نه سبز.
-# ---------------------------------------------------------------------------
-UP_CLASSES = {"high", "up", "green", "success", "plus", "positive", "text-success", "text-green"}
-DOWN_CLASSES = {"low", "down", "red", "danger", "minus", "negative", "drop", "text-danger", "text-red"}
-UP_COLORS = {"green", "#0f0", "#00ff00", "#22c55e", "#16a34a", "#4ade80"}
-DOWN_COLORS = {"red", "#f00", "#ff0000", "#ef4444", "#dc2626", "#f87171"}
-
-# منفی: «-2.1» یا «2.1-» (در متن راست‌به‌چپ)؛ تیره بین دو عدد (بازه) حساب نمی‌شود
-_NEG_TEXT = re.compile(r'(?<![\w.])[-−–]\s*\d|\d\s*[-−–](?![\w])')
-_POS_TEXT = re.compile(r'(?<![\w.])\+\s*\d|\d\s*\+(?!\d)')
-
-
-def detect_direction(cell_tag) -> str | None:
-    """'up' | 'down' | None (نامشخص)."""
-    if cell_tag is None:
-        return None
+def is_cell_red(cell_tag) -> bool:
+    if not cell_tag:
+        return False
     text = get_cell_text(cell_tag)
+    if "-" in text or "−" in text or "🔻" in text:
+        return True
+    
+    if not isinstance(cell_tag, str):
+        classes = list(cell_tag.get("class", []))
+        for child in cell_tag.find_all(True):
+            classes.extend(child.get("class", []))
+        if cell_tag.parent:
+            classes.extend(cell_tag.parent.get("class", []))
+        
+        class_str = " ".join([str(c) for c in classes]).lower()
+        style_str = str(cell_tag.get("style", "")).lower()
+        if any(kw in class_str for kw in ["low", "drop", "red", "danger", "down", "minus"]) or "color: red" in style_str or "color:#f" in style_str:
+            return True
+    return False
 
-    neg = bool(_NEG_TEXT.search(text)) or any(m in text for m in ("🔻", "▼"))
-    pos = bool(_POS_TEXT.search(text)) or any(m in text for m in ("🔺", "▲"))
-    if neg and not pos:
-        return "down"
-    if pos and not neg:
-        return "up"
-    if neg and pos:
-        return None
-
-    if isinstance(cell_tag, str):
-        return None
-
-    # کلاس‌ها: فقط خود سلول و فرزندانش، و فقط تطبیق دقیق توکن (نه زیررشته)
-    class_tokens = set()
-    colors = set()
-    for node in [cell_tag] + cell_tag.find_all(True):
-        class_tokens.update(str(c).lower() for c in (node.get("class") or []))
-        for m in re.finditer(r'(?:^|;)\s*color\s*:\s*([^;]+)', str(node.get("style", "")).lower()):
-            colors.add(m.group(1).strip())
-
-    down = bool(class_tokens & DOWN_CLASSES) or bool(colors & DOWN_COLORS)
-    up = bool(class_tokens & UP_CLASSES) or bool(colors & UP_COLORS)
-    if down and not up:
-        return "down"
-    if up and not down:
-        return "up"
-    return None
-
-
-def parse_changes(change_cell, price_val: float) -> tuple[str, str, float, str]:
-    """
-    خروجی: (مقدار تغییر, درصد تغییر, درصد علامت‌دار, direction)
-    direction یکی از: up / down / flat / unknown
-    """
-    if change_cell is None:
-        return "0", "0%", 0.0, "unknown"
-
+def parse_changes(change_cell, price_val: float) -> tuple[str, str, float]:
+    if not change_cell:
+        return "0", "0%", 0.0
+    
     raw_text = get_cell_text(change_cell)
-    clean_text = to_english_digits(raw_text).replace("٫", ".")
+    clean_text = to_english_digits(raw_text)
+    is_red = is_cell_red(change_cell)
 
     pct_match = re.search(r'\(([^)]+)\)', clean_text)
     pct_val = None
@@ -240,717 +356,689 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str, float, str]:
         pct_val = (amt_val / price_val) * 100
 
     pct_val = pct_val or 0.0
-    if pct_val > 100:
-        log(f"⚠️ درصد تغییر غیرعادی ({pct_val:.2f}) نادیده گرفته شد؛ جهت «نامشخص» می‌شود.")
-        return "0", "0%", 0.0, "unknown"
 
-    if pct_val == 0:
-        return "0", "0%", 0.0, "flat"
+    if abs(pct_val) > 100:
+        pct_val = 0.0
+        amt_val = 0.0
 
-    direction = detect_direction(change_cell)
-    if direction is None:
-        log(f"⚠️ جهت تغییر تشخیص داده نشد (متن سلول: {raw_text!r}) → نامشخص")
-        return "0", "0%", 0.0, "unknown"
+    signed_amt = -amt_val if is_red else amt_val
 
-    signed_pct = -pct_val if direction == "down" else pct_val
-    amt_str = f"-{format_number_with_comma(amt_val)}" if direction == "down" and amt_val != 0 else format_number_with_comma(amt_val)
-    pct_str = f"{signed_pct:.2f}%"
-    return amt_str, pct_str, signed_pct, direction
+    if is_red:
+        amt_str = f"-{format_number_with_comma(amt_val)}" if amt_val != 0 else "0"
+        pct_str = f"-{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
+    else:
+        amt_str = format_number_with_comma(amt_val)
+        pct_str = f"{pct_val:.2f}%".rstrip('0').rstrip('.%') + "%" if pct_val != 0 else "0%"
 
+    return amt_str, pct_str, signed_amt
 
-def parse_percent_cell(cell) -> tuple[str, float, str]:
+def find_header_col(header_cells, target_patterns) -> int:
+    for idx, c in enumerate(header_cells):
+        h_norm = get_cell_text(c).replace(" ", "").replace("\u200c", "")
+        for pat in target_patterns:
+            if pat.replace(" ", "") in h_norm:
+                return idx
+    return -1
+
+def is_real_data_table(table, header_cells) -> bool:
+    if table.find(["input", "select", "button"]) is not None:
+        return False
+
+    header_text = " ".join(get_cell_text(c) for c in header_cells)
+    has_price_col = any(k in header_text for k in ["قیمت زنده", "قیمت", "ارزش"])
+    has_change_col = "تغییر" in header_text
+    return has_price_col and has_change_col
+
+def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> float | None:
     """
-    برای سلولی که مستقیماً درصد است (صفحهٔ شاخص بورس).
-    خروجی: (رشتهٔ درصد نرمال‌شده, درصد علامت‌دار, direction)
+    فاصلهٔ (به دقیقه) زمان درج‌شده در ردیف جدول تا «اکنونِ تهران».
+    خروجی None یعنی «قابل تشخیص نیست» (و در اعتبارسنجی نادیده گرفته می‌شود).
+    پشتیبانی از: «همین الان/چند ثانیه پیش»، «X دقیقه/ساعت پیش»، «دیروز»،
+    ساعت ساده (HH:MM[:SS])، و تاریخ شمسی/میلادی (به‌همراه یا بدون ساعت).
     """
-    if cell is None:
-        return "0%", 0.0, "unknown"
-    text = to_english_digits(get_cell_text(cell)).replace("٫", ".")
-    m = re.search(r'(\d+(?:\.\d+)?)', text)
-    if not m:
-        return "0%", 0.0, "unknown"
-    pct = float(m.group(1))
-    if pct > 100:
-        return "0%", 0.0, "unknown"
-    if pct == 0:
-        return "0%", 0.0, "flat"
-    direction = detect_direction(cell)
-    if direction is None:
-        log(f"⚠️ جهت درصد تغییر شاخص تشخیص داده نشد ({get_cell_text(cell)!r}) → نامشخص")
-        return "0%", 0.0, "unknown"
-    signed = -pct if direction == "down" else pct
-    return f"{signed:.2f}%", signed, direction
+    if not raw_time_str:
+        return None
+    text = to_english_digits(raw_time_str).strip()
+    if not text or text == "-":
+        return None
 
-# فقط تطبیق دقیق عنوان (بعد از نرمال‌سازی). تطبیق زیررشته‌ای عمداً حذف شده تا
-# «دلار کانادا» یا «بیتکوین کش» جای نماد اصلی ننشیند.
-EXACT_TITLES = {clean_title(fa): (fa, keys) for fa, keys in SYMBOL_MAP.items()}
+    if any(kw in text for kw in ["همین الان", "همین الآن", "چند ثانیه", "لحظاتی", "دقایقی"]):
+        return 0.0
 
+    m_rel = re.search(r'(\d+)\s*دقیقه', text)
+    if m_rel:
+        return float(m_rel.group(1))
+    h_rel = re.search(r'(\d+)\s*ساعت', text)
+    if h_rel:
+        return float(h_rel.group(1)) * 60.0
+    d_rel = re.search(r'(\d+)\s*روز', text)
+    if d_rel:
+        return float(d_rel.group(1)) * 1440.0
+    if "دیروز" in text:
+        return 1440.0
+
+    # --- تاریخ (شمسی یا میلادی) ---
+    row_date = None
+    d_match = re.search(r'(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})', text)
+    if d_match:
+        y, mo, d = (int(d_match.group(i)) for i in (1, 2, 3))
+        try:
+            if y < 1700:
+                row_date = jdatetime.date(y, mo, d).togregorian()
+            else:
+                row_date = datetime(y, mo, d).date()
+        except Exception:
+            row_date = None
+
+    # --- ساعت ---
+    t_match = re.search(r'(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)', text)
+    hour = minute = second = None
+    if t_match:
+        hour, minute = int(t_match.group(1)), int(t_match.group(2))
+        second = int(t_match.group(3)) if t_match.group(3) else 0
+        if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+            hour = minute = second = None
+
+    today = tehran_now.date()
+
+    if row_date is not None:
+        if hour is None:
+            # فقط تاریخ: اگر امروز باشد از ساعتش خبر نداریم؛ اگر قدیمی‌تر باشد قطعاً کهنه است
+            days = (today - row_date).days
+            return float(days * 1440) if days > 0 else None
+        row_dt = tehran_now.tzinfo.localize(
+            datetime(row_date.year, row_date.month, row_date.day, hour, minute, second)
+        ) if hasattr(tehran_now.tzinfo, "localize") else tehran_now.replace(
+            year=row_date.year, month=row_date.month, day=row_date.day,
+            hour=hour, minute=minute, second=second, microsecond=0
+        )
+        diff_min = (tehran_now - row_dt).total_seconds() / 60.0
+        return max(diff_min, 0.0)
+
+    if hour is not None:
+        row_dt = tehran_now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+        diff_min = (tehran_now - row_dt).total_seconds() / 60.0
+        # ساعتِ «چند دقیقه در آینده» = اختلاف جزئی ساعت سرور/سایت؛ نادیده
+        if -10.0 <= diff_min < 0:
+            return 0.0
+        # ساعتی که از «اکنون» جلوتر است یعنی مربوط به دیروز بوده
+        if diff_min < 0:
+            diff_min += 1440.0
+        return diff_min
+
+    return None
 
 def scrape_homepage_data():
-    scraped_data = []
-    near_misses = set()
-    updated_at = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    MAX_SCRAPE_RETRIES = 3
+    RETRY_WAIT_SECONDS = 5.0
+    MAX_ACCEPTABLE_TIME_DIFF_MINUTES = 45.0  # آستانه فاصله زمانی نامتعارف (۴۵ دقیقه)
+    # فقط در این دو حالت «انتظار و تلاش مجدد» ارزش دارد (ردیف‌های کم‌معامله مثل
+    # انس پلاتین یا سکه گرمی ممکن است به‌طور طبیعی بیش از ۴۵ دقیقه به‌روز نشوند):
+    #  ۱) یکی از نمادهای حیاتی کهنه باشد
+    #  ۲) درصد بالایی از کل ردیف‌ها کهنه باشد (نشانهٔ بارگذاری ناقص JS سایت)
+    CRITICAL_KEYS = {"usd", "eur", "gold_18k", "coin_emami", "silver_gram", "btc"}
+    SYSTEMIC_STALE_RATIO = 0.30
+    MIN_ROWS_FOR_RATIO_CHECK = 10  # برای نمونهٔ خیلی کوچک، درصد معنی‌دار نیست
 
-    try:
-        log("در حال استخراج زنده داده‌ها از tgju.org...")
-        html = fetch_rendered_html(
-            "https://www.tgju.org",
-            wait_selector="#currency-overview-content table tr td",
-            extra_wait=1.0,
+    sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
+    FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
+    OFFICIAL_RATE_LABELS = ("نیمایی", "مبادله")
+    TIME_HEADER_PATTERNS = ["زمان", "ساعت", "تاریخ", "تایم", "بروزرسانی", "زمان بروزرسانی"]
+
+    def _currency_table_affinity(tbl):
+        score = 0
+        node, depth = tbl, 0
+        while node is not None and depth < 6:
+            attrs = getattr(node, "attrs", None)
+            if attrs:
+                blob = " ".join(
+                    v if isinstance(v, str) else " ".join(v)
+                    for v in attrs.values()
+                )
+                if any(lbl in blob for lbl in FREE_MARKET_LABELS):
+                    score += 10
+                if any(lbl in blob for lbl in OFFICIAL_RATE_LABELS):
+                    score -= 10
+            node = getattr(node, "parent", None)
+            depth += 1
+        return score
+
+    best_attempt = None  # (score, scraped_data, seen_header_texts, unrecognized_titles)
+
+    for attempt in range(1, MAX_SCRAPE_RETRIES + 1):
+        print(f"در حال دریافت داده‌ها از tgju.org (تلاش {attempt} از {MAX_SCRAPE_RETRIES}) ...", flush=True)
+        scraped_data = []
+        seen_header_texts = []
+        unrecognized_titles = set()
+
+        try:
+            html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0 * attempt)
+            # زمان مرجع «بعد از» رندر گرفته می‌شود، نه قبل از آن (رندر ~۱۵-۲۰ ثانیه طول می‌کشد)
+            tehran_now = datetime.now(tehran_tz)
+            updated_at = tehran_now.strftime("%Y-%m-%d %H:%M:%S")
+            if html:
+                soup = BeautifulSoup(html, "html.parser")
+
+                # ریشهٔ باگ «دلار = 85,840 به‌جای 233,500»: تب‌های ارز کشورهای دیگر
+                # هم ردیف «دلار» دارند. ارزهای آزاد فقط از کانتینر ایران پذیرفته می‌شوند.
+                currency_container = soup.find(id="currency-overview-content")
+                if currency_container is not None:
+                    currency_tables = set(currency_container.find_all("table"))
+                else:
+                    currency_tables = None
+                    print(
+                        "⚠️ هشدار: کانتینر «currency-overview-content» پیدا نشد؛ محدودسازی ضدتداخل "
+                        "ارزها غیرفعال است (فقط امتیاز affinity جدول اعمال می‌شود).",
+                        flush=True,
+                    )
+
+                for table in soup.find_all("table"):
+                    price_col_idx, change_col_idx = 1, 2
+                    header_tr = table.find("tr")
+                    header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+                    table_currency_affinity = _currency_table_affinity(table)
+
+                    seen_header_texts.append(" ".join(get_cell_text(c) for c in header_cells))
+
+                    if not is_real_data_table(table, header_cells):
+                        continue
+
+                    time_col_idx = find_header_col(header_cells, TIME_HEADER_PATTERNS)
+
+                    for idx, c in enumerate(header_cells):
+                        if idx == 0:
+                            continue
+                        c_txt = get_cell_text(c)
+                        if "ارزش" in c_txt:
+                            price_col_idx = idx
+                        elif any(k in c_txt for k in ["قیمت", "قیمت زنده", "قیمت (ریال)"]) and price_col_idx == 1:
+                            price_col_idx = idx
+                        elif "تغییر" in c_txt:
+                            change_col_idx = idx
+
+                    for row in table.find_all("tr"):
+                        cols = row.find_all(["td", "th"])
+                        if not cols or len(cols) < 2:
+                            continue
+
+                        row_title = clean_title(get_cell_text(cols[0]))
+
+                        matched_fa = next(
+                            (t for t in sorted_targets if clean_title(t) == row_title),
+                            None
+                        )
+                        if not matched_fa and "/" not in row_title:
+                            matched_fa = next(
+                                (t for t in sorted_targets if clean_title(t) in row_title),
+                                None
+                            )
+
+                        if not matched_fa and row is not header_tr and "/" not in row_title and len(row_title) >= 2:
+                            unrecognized_titles.add(row_title)
+
+                        if matched_fa:
+                            symbol_keys = SYMBOL_MAP[matched_fa]
+                            primary_key = symbol_keys[0]
+                            if (
+                                primary_key in FREE_MARKET_CURRENCY_KEYS
+                                and currency_tables is not None
+                                and table not in currency_tables
+                            ):
+                                matched_fa = None
+
+                        if matched_fa:
+                            symbol_keys = SYMBOL_MAP[matched_fa]
+                            primary_key = symbol_keys[0]
+
+                            price_cell = cols[price_col_idx] if len(cols) > price_col_idx else cols[1]
+                            
+                            if primary_key in CRYPTO and len(cols) >= 3:
+                                price_cell = cols[1]
+                            elif primary_key in COMMODITIES:
+                                usd_col = find_header_col(header_cells, ["قیمت/دلار", "قیمت ($)", "قیمت$"])
+                                if usd_col != -1 and usd_col < len(cols):
+                                    price_cell = cols[usd_col]
+                                else:
+                                    for c in cols[1:]:
+                                        c_txt = get_cell_text(c)
+                                        if "$" in c_txt or "دلار" in c_txt:
+                                            price_cell = c
+                                            break
+                            elif primary_key in INDICES:
+                                value_col = find_header_col(header_cells, ["ارزش"])
+                                if value_col != -1 and value_col < len(cols):
+                                    price_cell = cols[value_col]
+                                else:
+                                    found_val = False
+                                    for idx, c in enumerate(cols):
+                                        c_text = get_cell_text(c)
+                                        if c_text and c_text != "-" and any(char.isdigit() for char in c_text):
+                                            h_text = get_cell_text(header_cells[idx]) if idx < len(header_cells) else ""
+                                            if "ارزش" in h_text or "قیمت" in h_text or idx == price_col_idx:
+                                                price_cell = c
+                                                found_val = True
+                                                break
+                                    if not found_val and len(cols) > price_col_idx:
+                                        price_cell = cols[price_col_idx]
+
+                            price_str, price_num = parse_price_value(get_cell_text(price_cell), is_index=(primary_key in INDICES))
+                            
+                            change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
+                            change_amt, change_pct, change_num = parse_changes(change_cell, price_num)
+
+                            # استخراج زمان و محاسبه فاصله با زمان تهران
+                            raw_row_time = get_cell_text(cols[time_col_idx]) if (time_col_idx != -1 and len(cols) > time_col_idx) else ""
+                            time_diff_min = parse_row_time_diff_minutes(raw_row_time, tehran_now)
+
+                            # تبدیل قیمت از ریال به تومان برای نمادهای مشخص‌شده
+                            if primary_key in TOMAN_SYMBOLS and price_num:
+                                price_num = price_num / 10
+                                price_str = format_number_with_comma(price_num)
+
+                            display_title = "نفت اوپک" if primary_key == "oil_opec" else matched_fa
+
+                            for skey in symbol_keys:
+                                scraped_data.append({
+                                    "symbol_key": skey,
+                                    "title_fa": display_title,
+                                    "price": price_str,
+                                    "unit": get_unit(skey),
+                                    "price_num": price_num,
+                                    "change_amount": change_amt,
+                                    "change_percent": change_pct,
+                                    "change_num": change_num,
+                                    "updated_at": updated_at,
+                                    "_affinity": table_currency_affinity,
+                                    "_time_diff_min": time_diff_min
+                                })
+        except Exception as e:
+            print(f"خطا در استخراج (تلاش {attempt}): {e}", flush=True)
+
+        # ---------- اعتبارسنجی فاصله زمانی ----------
+        timed = [i for i in scraped_data if i.get("_time_diff_min") is not None]
+        stale_items = [i for i in timed if i["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES]
+        critical_stale = [i for i in stale_items if i["symbol_key"] in CRITICAL_KEYS]
+        stale_ratio = (len(stale_items) / len(timed)) if timed else 0.0
+
+        def _names(items):
+            return " | ".join(dict.fromkeys(i.get("title_fa") or i["symbol_key"] for i in items))
+
+        # نمرهٔ کیفیت این تلاش (کمتر = بهتر): بدون داده بدترین است
+        score = (
+            0 if scraped_data else 1,
+            len(critical_stale),
+            round(stale_ratio, 3),
+            -len(scraped_data),
         )
+        if best_attempt is None or score <= best_attempt[0]:
+            best_attempt = (score, scraped_data, seen_header_texts, unrecognized_titles)
 
-        if html:
-            soup = BeautifulSoup(html, "html.parser")
-            currency_container = soup.find(id="currency-overview-content")
-            currency_table_ids = {id(t) for t in currency_container.find_all("table")} if currency_container else None
-            if currency_table_ids is None:
-                log("⚠️ کانتینر currency-overview-content پیدا نشد؛ محدودسازی جدول دلار غیرفعال است.")
+        if not timed and scraped_data:
+            print("ℹ️ ستون زمان در هیچ جدولی پیدا/تفسیر نشد؛ اعتبارسنجی زمانی انجام نشد.", flush=True)
+            break
 
-            for table in soup.find_all("table"):
-                header_tr = table.find("tr")
-                header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+        systemic_stale = len(timed) >= MIN_ROWS_FOR_RATIO_CHECK and stale_ratio >= SYSTEMIC_STALE_RATIO
+        need_retry = (not scraped_data) or bool(critical_stale) or systemic_stale
 
-                price_col_idx, change_col_idx = 1, 2
-                for idx, c in enumerate(header_cells):
-                    if idx == 0: continue
-                    c_txt = get_cell_text(c)
-                    if "ارزش" in c_txt or any(k in c_txt for k in ["قیمت", "قیمت زنده"]):
-                        price_col_idx = idx
-                    elif "تغییر" in c_txt:
-                        change_col_idx = idx
+        if need_retry and attempt < MAX_SCRAPE_RETRIES:
+            reason = (
+                f"نماد حیاتی کهنه: {_names(critical_stale)}" if critical_stale
+                else f"{len(stale_items)} از {len(timed)} ردیف ({stale_ratio:.0%}) کهنه" if scraped_data
+                else "هیچ داده‌ای استخراج نشد"
+            )
+            print(
+                f"⚠ فاصله زمانی نامتعارف با تایم تهران (>{MAX_ACCEPTABLE_TIME_DIFF_MINUTES:.0f} دقیقه) - {reason}. "
+                f"{RETRY_WAIT_SECONDS:.0f} ثانیه صبر و تلاش مجدد...",
+                flush=True,
+            )
+            time.sleep(RETRY_WAIT_SECONDS)
+            continue
 
-                for row in table.find_all("tr"):
-                    cols = row.find_all(["td", "th"])
-                    if not cols or len(cols) < 2:
-                        continue
+        if stale_items:
+            print(
+                f"ℹ️ {len(stale_items)} نماد ({_names(stale_items)}) بیش از "
+                f"{MAX_ACCEPTABLE_TIME_DIFF_MINUTES:.0f} دقیقه از تایم تهران فاصله دارند "
+                f"(احتمال تعطیلی بازار/کم‌معامله بودن). بهترین نتیجهٔ به‌دست‌آمده ثبت می‌شود.",
+                flush=True,
+            )
+        break
 
-                    row_title = clean_title(get_cell_text(cols[0]))
-                    entry = EXACT_TITLES.get(row_title)
-                    if not entry:
-                        if row_title and len(row_title) < 60 and any(t in row_title for t in EXACT_TITLES):
-                            near_misses.add(row_title)
-                        continue
-
-                    matched_fa, symbol_keys = entry
-                    primary_key = symbol_keys[0]
-
-                    # دلار فقط از جدول بازار ارز (در صورت وجود کانتینر)
-                    if primary_key == "usd" and currency_table_ids is not None and id(table) not in currency_table_ids:
-                        continue
-
-                    price_cell = cols[price_col_idx] if len(cols) > price_col_idx else cols[1]
-                    price_str, price_num = parse_price_value(get_cell_text(price_cell))
-
-                    change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
-                    change_amt, change_pct, change_num, direction = parse_changes(change_cell, price_num)
-
-                    if primary_key in TOMAN_SYMBOLS and price_num:
-                        price_num = price_num / 10
-                        price_str = format_number_with_comma(price_num)
-
-                    for skey in symbol_keys:
-                        scraped_data.append({
-                            "symbol_key": skey,
-                            "title_fa": matched_fa,
-                            "price": price_str,
-                            "unit": get_unit(skey),
-                            "price_num": price_num,
-                            "change_percent": change_pct,
-                            "change_num": change_num,
-                            "direction": direction,
-                            "updated_at": updated_at
-                        })
-    except Exception as e:
-        log(f"❌ خطا در استخراج داده‌های اصلی: {e}")
+    if best_attempt is not None:
+        _, scraped_data, seen_header_texts, unrecognized_titles = best_attempt
+    else:
+        scraped_data, seen_header_texts, unrecognized_titles = [], [], set()
 
     unique_data = {}
+    best_affinity = {}
     for item in scraped_data:
         key = item["symbol_key"]
-        if key not in unique_data or unique_data[key]["price"] == "-":
+        affinity = item.pop("_affinity", 0)
+        item.pop("_time_diff_min", None)
+        if key not in unique_data:
             unique_data[key] = item
-        else:
-            old, new = unique_data[key]["price_num"], item["price_num"]
-            if old and new and abs(new - old) / old > 0.02:
-                log(f"⚠️ چند ردیف متفاوت برای {key} پیدا شد ({old} در برابر {new})؛ اولی نگه داشته شد.")
+            best_affinity[key] = affinity
+        elif key in FREE_MARKET_CURRENCY_KEYS:
+            if affinity > best_affinity.get(key, 0) or (unique_data[key]["price"] == "-" and item["price"] != "-"):
+                unique_data[key] = item
+                best_affinity[key] = affinity
+        elif unique_data[key]["price"] == "-":
+            unique_data[key] = item
 
-    missing = [k for k in REQUIRED_SYMBOLS if k != "bourse_total" and k not in unique_data]
-    if missing and near_misses:
-        log(f"ℹ️ ردیف‌های مشابه که عمداً نادیده گرفته شدند: {sorted(near_misses)[:8]}")
+    # ضرب مقدار تغییرات رمزارزها در نرخ تومانی دلار
+    usd_item = unique_data.get("usd")
+    usd_price_toman = _to_float(usd_item["price"]) if usd_item else None
 
-    return unique_data
+    if usd_price_toman and usd_price_toman > 0:
+        for item in unique_data.values():
+            if item["symbol_key"] in CRYPTO:
+                raw_change = item.get("change_num", 0.0)
+                if raw_change != 0:
+                    toman_change = raw_change * usd_price_toman
+                    item["change_amount"] = format_number_with_comma(toman_change)
+
+    for item in unique_data.values():
+        item.pop("price_num", None)
+        item.pop("change_num", None)
+
+    known_header_keywords = ["قیمت زنده", "آخرین قیمت", "قیمت / دلار", "ارزش", "تغییر"]
+    all_headers_text = " ".join(seen_header_texts)
+    if seen_header_texts and not any(kw in all_headers_text for kw in known_header_keywords):
+        print(
+            "🚨 هشدار جدی: هیچ‌کدام از سرستون‌های شناخته‌شده در هیچ جدولی روی صفحه پیدا نشد.",
+            flush=True,
+        )
+
+    if unrecognized_titles:
+        sample = sorted(unrecognized_titles)[:15]
+        print(
+            f"\n💡 {len(unrecognized_titles)} عنوان ردیف ناشناخته پیدا شد: {' | '.join(sample)}",
+            flush=True,
+        )
+
+    return list(unique_data.values())
 
 
-BOURSE_URL = "https://www.tgju.org/profile/gc30"
-# اگر عنوان صفحه یکی از این‌ها را داشت، شاخص مورد نظر ما نیست
-BOURSE_TITLE_REJECT = ("هم وزن", "فرابورس")
+def find_value_for_label(soup, labels):
+    """
+    جست‌وجوی مقدار مقابل یک برچسب (مثلا «نرخ فعلی») در جدول‌های اطلاعات
+    یک صفحه اختصاصی (profile) تک‌دارایی.
+    """
+    for row in soup.find_all("tr"):
+        cells = row.find_all(["th", "td"])
+        if len(cells) < 2:
+            continue
+        for i, c in enumerate(cells):
+            c_txt = clean_title(get_cell_text(c))
+            if any(lbl in c_txt for lbl in labels):
+                if i + 1 < len(cells):
+                    return get_cell_text(cells[i + 1])
+                elif i - 1 >= 0:
+                    return get_cell_text(cells[i - 1])
+    for item in soup.select("li, div"):
+        spans = item.find_all(["span", "div", "td"], recursive=False)
+        if len(spans) >= 2:
+            label_txt = clean_title(get_cell_text(spans[0]))
+            if any(lbl in label_txt for lbl in labels):
+                return get_cell_text(spans[1])
+    return None
 
 
 def fetch_bourse_total_index():
-    updated_at = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    price_labels = ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای"]
+    amount_labels = ["میزان تغییر نسبت به روز گذشته", "میزان تغییر"]
+    percent_labels = ["درصد تغییر نسبت به روز گذشته", "درصد تغییر"]
 
     try:
-        log("در حال استخراج شاخص بورس از صفحه اختصاصی...")
-        html = fetch_rendered_html(BOURSE_URL, wait_selector="table tr td", extra_wait=1.0)
+        html = fetch_rendered_html("https://www.tgju.org/profile/gc30", extra_wait=2.0)
         if not html:
             return None
         soup = BeautifulSoup(html, "html.parser")
 
-        # اطمینان از اینکه صفحه واقعاً «شاخص کل» است
-        page_title = clean_title(soup.title.get_text(" ", strip=True)) if soup.title else ""
-        h1 = soup.find("h1")
-        h1_text = clean_title(get_cell_text(h1)) if h1 else ""
-        combined = f"{page_title} | {h1_text}"
-        if "شاخص کل" not in combined or any(bad in combined for bad in BOURSE_TITLE_REJECT):
-            log(f"⛔ صفحهٔ {BOURSE_URL} شاخص کل بورس نیست. عنوان: {combined!r}")
-            return None
+        raw_price = find_value_for_label(soup, price_labels)
+        raw_amount = find_value_for_label(soup, amount_labels)
+        raw_percent = find_value_for_label(soup, percent_labels)
 
-        raw_price = None
-        pct_cell_daily = None      # «درصد تغییر نسبت به روز گذشته»
-        pct_cell_plain = None      # دقیقاً «درصد تغییر»
-        seen_labels = []
-
-        for row in soup.find_all("tr"):
-            cells = row.find_all(["th", "td"])
-            if len(cells) < 2:
-                continue
-            label = clean_title(get_cell_text(cells[0]))
-            val_cell = cells[1]
-            val_text = get_cell_text(val_cell)
-            seen_labels.append(label)
-
-            # فقط «نرخ فعلی»؛ قیمت بازگشایی (کهنه) هرگز جایگزین نمی‌شود
-            if "نرخ فعلی" in label:
-                if raw_price is None and val_text:
-                    raw_price = val_text
-            elif "درصد تغییر نسبت به روز گذشته" in label:
-                if pct_cell_daily is None:
-                    pct_cell_daily = val_cell
-            elif label == "درصد تغییر":
-                if pct_cell_plain is None:
-                    pct_cell_plain = val_cell
-
-        if not raw_price:
-            log(f"⛔ «نرخ فعلی» در صفحهٔ شاخص پیدا نشد. برچسب‌های دیده‌شده: {seen_labels[:15]}")
+        if raw_price is None:
+            print("هشدار: مقدار «نرخ فعلی» برای شاخص کل (gc30) پیدا نشد.", flush=True)
             return None
 
         price_str, price_num = parse_price_value(raw_price, is_index=True)
-        if price_num <= 0:
-            log(f"⛔ قیمت شاخص نامعتبر است: {raw_price!r}")
-            return None
 
-        pct_cell = pct_cell_daily if pct_cell_daily is not None else pct_cell_plain
-        if pct_cell is None:
-            log("⚠️ ردیف درصد تغییر روزانهٔ شاخص پیدا نشد → جهت نامشخص")
-        change_pct_str, change_num, direction = parse_percent_cell(pct_cell)
+        change_amt = "0"
+        if raw_amount is not None:
+            amt_clean = to_english_digits(raw_amount)
+            amt_match = re.search(r'(-?\d+(?:\.\d+)?)', amt_clean)
+            if amt_match:
+                is_neg = "-" in amt_clean or "کاهش" in raw_amount
+                amt_val = abs(float(amt_match.group(1)))
+                if is_neg:
+                    amt_val = -amt_val
+                change_amt = format_number_with_comma(amt_val)
+
+        change_pct = "0%"
+        if raw_percent is not None:
+            pct_clean = to_english_digits(raw_percent)
+            pct_match = re.search(r'(-?\d+(?:\.\d+)?)', pct_clean)
+            if pct_match:
+                is_neg = "-" in pct_clean or "کاهش" in raw_percent
+                pct_val = abs(float(pct_match.group(1)))
+                if is_neg:
+                    pct_val = -pct_val
+                change_pct = f"{pct_val:.2f}%"
 
         return {
             "symbol_key": "bourse_total",
             "title_fa": "شاخص کل",
             "price": price_str,
             "unit": get_unit("bourse_total"),
-            "price_num": price_num,
-            "change_percent": change_pct_str,
-            "change_num": change_num,
-            "direction": direction,
+            "change_amount": change_amt,
+            "change_percent": change_pct,
             "updated_at": updated_at
         }
     except Exception as e:
-        log(f"❌ خطا در استخراج شاخص کل بورس: {e}")
+        print(f"خطا در استخراج شاخص کل بورس از gc30: {e}", flush=True)
         return None
 
-def fetch_market_data():
-    market_dict = scrape_homepage_data()
-    bourse_item = fetch_bourse_total_index()
-    if bourse_item:
-        market_dict["bourse_total"] = bourse_item
-    return market_dict
-
-def get_asset_data(market, possible_keys):
-    for key in possible_keys:
-        clean_key = str(key).lower()
-        if clean_key in market:
-            return market[clean_key]
-    return {}
-
-def extract_price(item):
-    if not item or not isinstance(item, dict):
-        return None
-    for field in ['price', 'p', 'current_price', 'val', 'value', 'last_price']:
-        if field in item and item[field] is not None:
-            return item[field]
-    return None
-
-def format_price(val):
-    if val is None or val == "---" or val == "":
-        return "---"
-    return str(val)
-
-def parse_change_info(item):
-    if not item or not isinstance(item, dict):
-        return {"pct": "0.0%", "status": "neutral", "emoji": "➖"}
-
-    direction = item.get("direction", "unknown")
-    if direction == "up":
-        return {"pct": item.get("change_percent", "+0.0%"), "status": "bullish", "emoji": "🔺"}
-    if direction == "down":
-        return {"pct": item.get("change_percent", "-0.0%"), "status": "bearish", "emoji": "🔻"}
-    if direction == "flat":
-        return {"pct": "0.0%", "status": "neutral", "emoji": "➖"}
-    # جهت نامشخص: نه سبز، نه قرمز
-    return {"pct": "نامشخص", "status": "unknown", "emoji": "❔"}
+def get_db_connection():
+    turso_url = os.environ.get("TURSO_DATABASE_URL", "").strip()
+    turso_token = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+    
+    if turso_url and turso_token and HAS_LIBSQL:
+        if turso_url.startswith("libsql://"):
+            turso_url = turso_url.replace("libsql://", "https://")
+        elif not turso_url.startswith("https://"):
+            turso_url = f"https://{turso_url}"
+        print(f"اتصال مستقیم به دیتابیس Turso ({turso_url}) ...", flush=True)
+        return libsql.connect(database=turso_url, auth_token=turso_token)
+    else:
+        print("اتصال به SQLite محلی ...", flush=True)
+        return sqlite3.connect("market_database.db")
 
 
-# ---------------------------------------------------------------------------
-# زمان بازار
-# ---------------------------------------------------------------------------
-def is_weekend_closed(now: datetime) -> bool:
-    """پنجشنبه/جمعه یا تعطیلی دستی (MARKET_CLOSED=1). تعطیلات رسمی خودکار تشخیص داده نمی‌شوند."""
-    return FORCE_MARKET_CLOSED or now.weekday() in (3, 4)
-
-
-def is_bourse_session(now: datetime) -> bool:
-    """جلسهٔ معاملاتی بورس: شنبه تا چهارشنبه، ۰۹:۰۰ تا ۱۲:۳۰."""
-    if is_weekend_closed(now):
+def write_data_json(accepted):
+    """ساخت/به‌روزرسانی snapshot استاتیک data.json از داده‌های پذیرفته‌شده"""
+    json_path = "data.json"
+    temp_path = f"{json_path}.tmp"
+    try:
+        sorted_json_data = sorted(accepted, key=lambda x: x.get("title_fa", ""))
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(sorted_json_data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(temp_path, json_path)
+        print(
+            f"فایل {json_path} با موفقیت ایجاد/بروزرسانی شد ({len(sorted_json_data)} رکورد).",
+            flush=True,
+        )
+        return True
+    except Exception as e:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+        print(f"خطا در ایجاد فایل {json_path}: {e}", flush=True)
         return False
-    return dtime(9, 0) <= now.time() <= dtime(12, 30)
 
+def update_database(data_list):
+    existing_rows = {}
+    conn = None
 
-def bourse_label(now: datetime) -> str:
-    return "شاخص کل بورس" if is_bourse_session(now) else "شاخص کل بورس (پایانی)"
-
-
-# ---------------------------------------------------------------------------
-# اعتبارسنجی قبل از انتشار
-# ---------------------------------------------------------------------------
-def validate_market(market: dict) -> list[str]:
-    problems = []
-    unknown_dirs = 0
-    for key in REQUIRED_SYMBOLS:
-        item = market.get(key)
-        if not item:
-            problems.append(f"{key}: استخراج نشد")
-            continue
-        price_num = item.get("price_num")
-        if item.get("price") in (None, "", "-") or not isinstance(price_num, (int, float)) or price_num <= 0:
-            problems.append(f"{key}: قیمت نامعتبر ({item.get('price')!r})")
-            continue
-        if item.get("direction") == "unknown":
-            unknown_dirs += 1
-    if unknown_dirs > 3:
-        problems.append(f"جهت تغییر {unknown_dirs} نماد نامشخص است (احتمال تغییر ساختار سایت)")
-    return problems
-
-
-def load_last_state() -> dict:
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except FileNotFoundError:
-        return {}
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS market_prices (
+                symbol_key TEXT PRIMARY KEY,
+                title_fa TEXT,
+                price TEXT,
+                unit TEXT,
+                change_amount TEXT,
+                change_percent TEXT,
+                updated_at TEXT
+            )
+        """)
+
+        # در صورتی که جدول قبلاً بدون ستون unit ساخته شده باشد، ستون را اضافه می‌کند
+        try:
+            cursor.execute("ALTER TABLE market_prices ADD COLUMN unit TEXT")
+        except Exception:
+            pass
+
+        for row in cursor.execute(
+            "SELECT symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at FROM market_prices"
+        ).fetchall():
+            existing_rows[row[0]] = {
+                "symbol_key": row[0],
+                "title_fa": row[1],
+                "price": row[2],
+                "unit": row[3],
+                "change_amount": row[4],
+                "change_percent": row[5],
+                "updated_at": row[6],
+            }
     except Exception as e:
-        log(f"⚠️ خواندن {STATE_FILE} ناموفق بود (چک معقول‌بودن رد می‌شود): {e}")
-        return {}
+        print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
 
+    accepted = []
+    rejected_anomalies = []
 
-def save_last_state(market: dict, now: datetime) -> None:
-    data = {k: market[k]["price_num"] for k in REQUIRED_SYMBOLS}
-    data["_saved_at"] = now.isoformat()
+    for item in data_list:
+        old = existing_rows.get(item["symbol_key"])
+        old_val = _to_float(old["price"]) if old else None
+        new_val = _to_float(item["price"])
+
+        if old_val is not None and new_val is not None and old_val != 0:
+            old_digits, new_digits = _digit_count(old_val), _digit_count(new_val)
+            if abs(old_digits - new_digits) >= SANITY_DIGIT_DIFF_THRESHOLD:
+                rejected_anomalies.append({
+                    "symbol_key": item["symbol_key"],
+                    "title_fa": item["title_fa"],
+                    "old_price": old["price"],
+                    "new_price": item["price"],
+                })
+                continue
+
+            percent_change = abs(new_val - old_val) / abs(old_val) * 100
+            if percent_change >= SANITY_PERCENT_WARN_THRESHOLD:
+                print(
+                    f"⚠️ هشدار: {item['symbol_key']} ({item['title_fa']}) با {percent_change:.0f}% تغییر کرده.",
+                    flush=True,
+                )
+
+        accepted.append(item)
+
+    complete_snapshot = dict(existing_rows)
+    for item in accepted:
+        complete_snapshot[item["symbol_key"]] = item
+    write_data_json(list(complete_snapshot.values()))
+
+    if conn:
+        try:
+            for item in accepted:
+                cursor.execute("""
+                    INSERT INTO market_prices (symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(symbol_key) DO UPDATE SET
+                        title_fa = excluded.title_fa,
+                        price = excluded.price,
+                        unit = excluded.unit,
+                        change_amount = excluded.change_amount,
+                        change_percent = excluded.change_percent,
+                        updated_at = excluded.updated_at
+                """, (
+                    item["symbol_key"],
+                    item["title_fa"],
+                    item["price"],
+                    item["unit"],
+                    item["change_amount"],
+                    item["change_percent"],
+                    item["updated_at"]
+                ))
+
+            conn.commit()
+            print(f"تعداد {len(accepted)} شاخص در دیتابیس بروزرسانی شد.", flush=True)
+        except Exception as e:
+            print(f"❌ خطای دیتابیس (فایل data.json بدون مشکل تولید شد): {e}", flush=True)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    else:
+        print("ℹ️ دیتابیس در دسترس نبود اما data.json با موفقیت به‌روزرسانی شد.", flush=True)
+
+    if rejected_anomalies:
+        print(f"\n🚫 {len(rejected_anomalies)} مورد به دلیل جهش رقمی مشکوک رد شدند:", flush=True)
+        for a in rejected_anomalies:
+            print(
+                f"   - {a['symbol_key']} ({a['title_fa']}): مقدار قبلی {a['old_price']} <- مقدار جدید (رد شد) {a['new_price']}",
+                flush=True,
+            )
+
+    expected_roster = {sk for keys in SYMBOL_MAP.values() for sk in keys} | {"bourse_total"}
+    matched_roster = {item["symbol_key"] for item in accepted}
+    missing_this_run = sorted(expected_roster - matched_roster)
+    if missing_this_run:
+        print(f"\n📋 {len(missing_this_run)} نماد در این اجرا پیدا نشدند: {', '.join(missing_this_run)}", flush=True)
+
+    STALE_HOURS = 48
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+        now = datetime.now(pytz.timezone('Asia/Tehran'))
+        stale = []
+        for symbol_key, row in existing_rows.items():
+            if symbol_key in matched_roster:
+                continue
+            try:
+                last_dt = pytz.timezone('Asia/Tehran').localize(datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S"))
+                hours_old = (now - last_dt).total_seconds() / 3600
+                if hours_old >= STALE_HOURS:
+                    stale.append((symbol_key, round(hours_old)))
+            except (ValueError, TypeError):
+                continue
+        if stale:
+            stale.sort(key=lambda x: -x[1])
+            print(f"\n⏰ این نمادها بیش از {STALE_HOURS} ساعت است بروزرسانی نشده‌اند (به‌احتمال زیاد الگوی match‌شان خراب شده):", flush=True)
+            for symbol_key, hours_old in stale:
+                print(f"   - {symbol_key}: {hours_old} ساعت قدیمی", flush=True)
     except Exception as e:
-        log(f"⚠️ ذخیرهٔ {STATE_FILE} ناموفق بود: {e}")
+        print(f"هشدار: محاسبهٔ گزارش داده‌های قدیمی ممکن نشد: {e}", flush=True)
 
-
-def check_sanity(market: dict) -> list[str]:
-    """مقایسه با آخرین پست منتشرشده؛ جهش بیش از MAX_MOVE_RATIO مشکوک است (مثلاً خطای /10)."""
-    last = load_last_state()
-    problems = []
-    for key in REQUIRED_SYMBOLS:
-        prev = last.get(key)
-        cur = market[key]["price_num"]
-        if isinstance(prev, (int, float)) and prev > 0:
-            ratio = abs(cur - prev) / prev
-            if ratio > MAX_MOVE_RATIO:
-                problems.append(f"{key}: {prev:,.2f} → {cur:,.2f} ({ratio * 100:.1f}٪ تغییر نسبت به پست قبلی)")
-    return problems
-
-def generate_graphic_html(market, now):
-    shamsi_date = jdatetime.date.fromgregorian(date=now.date()).strftime("%Y/%m/%d")
-    time_str = now.strftime("%H:%M")
-    closed_suffix = " · 🕒 آخرین معامله" if is_weekend_closed(now) else ""
-    bourse_name = bourse_label(now)
-
-    usd = get_asset_data(market, ['usd'])
-    gold = get_asset_data(market, ['gold_18k'])
-    coin = get_asset_data(market, ['coin_emami'])
-    btc = get_asset_data(market, ['btc'])
-    ons = get_asset_data(market, ['gold_ounce'])
-    bourse = get_asset_data(market, ['bourse_total'])
-
-    usd_info = parse_change_info(usd)
-    gold_info = parse_change_info(gold)
-    coin_info = parse_change_info(coin)
-    btc_info = parse_change_info(btc)
-    ons_info = parse_change_info(ons)
-    bourse_info = parse_change_info(bourse)
-
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="fa" dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            @import url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css');
-            
-            * {{
-                box-sizing: border-box;
-                margin: 0;
-                padding: 0;
-                font-family: 'Vazirmatn', sans-serif;
-            }}
-            body {{
-                width: 1200px;
-                height: 750px;
-                background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-                color: #f8fafc;
-                padding: 30px 35px;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-                overflow: hidden;
-            }}
-            .header {{
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                border-bottom: 2px solid #334155;
-                padding-bottom: 14px;
-            }}
-            .brand {{
-                display: flex;
-                align-items: center;
-                gap: 12px;
-            }}
-            .live-dot {{
-                width: 14px;
-                height: 14px;
-                background-color: #22c55e;
-                border-radius: 50%;
-                box-shadow: 0 0 12px #22c55e;
-            }}
-            .title {{
-                font-size: 28px;
-                font-weight: 800;
-                color: #f1f5f9;
-            }}
-            .date-time {{
-                font-size: 20px;
-                color: #94a3b8;
-                font-weight: 500;
-                background: #0f172a;
-                padding: 6px 18px;
-                border-radius: 12px;
-                border: 1px solid #334155;
-            }}
-            .grid {{
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 18px;
-                margin-top: 10px;
-            }}
-            .card {{
-                background: rgba(30, 41, 59, 0.7);
-                border-radius: 20px;
-                padding: 20px;
-                border: 1px solid #334155;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-                position: relative;
-            }}
-            .card.hero {{
-                grid-column: span 3;
-                background: linear-gradient(90deg, rgba(30,41,59,0.9) 0%, rgba(15,23,42,0.9) 100%);
-                padding: 22px 35px;
-                flex-direction: row;
-                align-items: center;
-            }}
-            .card.bullish {{
-                border-color: #22c55e;
-                box-shadow: inset 0 0 15px rgba(34, 197, 94, 0.15), 0 4px 20px rgba(34, 197, 94, 0.1);
-            }}
-            .card.bearish {{
-                border-color: #ef4444;
-                box-shadow: inset 0 0 15px rgba(239, 68, 68, 0.15), 0 4px 20px rgba(239, 68, 68, 0.1);
-            }}
-            .asset-name {{
-                font-size: 20px;
-                color: #94a3b8;
-                font-weight: 600;
-            }}
-            .hero .asset-name {{ font-size: 24px; color: #cbd5e1; }}
-
-            .price-val {{
-                font-size: 32px;
-                font-weight: 900;
-                color: #ffffff;
-                margin: 8px 0;
-            }}
-            .hero .price-val {{ font-size: 42px; margin: 0; }}
-
-            .unit-text {{
-                font-size: 18px;
-                color: #94a3b8;
-                font-weight: 500;
-            }}
-
-            .badge {{
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                padding: 5px 14px;
-                border-radius: 30px;
-                font-size: 16px;
-                font-weight: 700;
-                width: fit-content;
-            }}
-            .badge.bullish {{ background: rgba(34, 197, 94, 0.2); color: #4ade80; }}
-            .badge.bearish {{ background: rgba(239, 68, 68, 0.2); color: #f87171; }}
-            .badge.neutral {{ background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }}
-            .badge.unknown {{ background: rgba(250, 204, 21, 0.15); color: #facc15; }}
-
-            .market-icon {{
-                font-size: 32px;
-                position: absolute;
-                left: 20px;
-                top: 20px;
-            }}
-            .hero .market-icon {{ position: static; font-size: 42px; }}
-
-            .footer {{
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                background: #0f172a;
-                padding: 14px 24px;
-                border-radius: 14px;
-                border: 1px solid #334155;
-                font-size: 16px;
-                color: #94a3b8;
-                margin-top: 10px;
-            }}
-            .bot-id {{ color: #38bdf8; font-weight: 700; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <div class="brand">
-                <div class="live-dot"></div>
-                <div class="title">نرخ امروز چند؟</div>
-            </div>
-            <div class="date-time">🗓 {shamsi_date} - ⏰ {time_str}{closed_suffix}</div>
-        </div>
-
-        <div class="grid">
-            <!-- دلار -->
-            <div class="card hero {usd_info['status']}">
-                <div>
-                    <div class="asset-name">💵 دلار بازار آزاد</div>
-                    <div class="price-val">{format_price(extract_price(usd))} <span class="unit-text">تومان</span></div>
-                </div>
-                <div style="display:flex; align-items:center; gap:20px;">
-                    <div class="badge {usd_info['status']}">
-                        <span>{usd_info['pct']}</span>
-                        <span>{usd_info['emoji']}</span>
-                    </div>
-                    <div class="market-icon">{usd_info['emoji']}</div>
-                </div>
-            </div>
-
-            <!-- سکه امامی -->
-            <div class="card {coin_info['status']}">
-                <div class="market-icon">{coin_info['emoji']}</div>
-                <div class="asset-name">🪙 سکه امامی</div>
-                <div class="price-val">{format_price(extract_price(coin))} <span class="unit-text">تومان</span></div>
-                <div class="badge {coin_info['status']}">
-                    <span>{coin_info['pct']}</span>
-                    <span>{coin_info['emoji']}</span>
-                </div>
-            </div>
-
-            <!-- طلای ۱۸ عیار -->
-            <div class="card {gold_info['status']}">
-                <div class="market-icon">{gold_info['emoji']}</div>
-                <div class="asset-name">🥇 طلای ۱۸ عیار</div>
-                <div class="price-val">{format_price(extract_price(gold))} <span class="unit-text">تومان</span></div>
-                <div class="badge {gold_info['status']}">
-                    <span>{gold_info['pct']}</span>
-                    <span>{gold_info['emoji']}</span>
-                </div>
-            </div>
-
-            <!-- بیت کوین -->
-            <div class="card {btc_info['status']}">
-                <div class="market-icon">{btc_info['emoji']}</div>
-                <div class="asset-name">🌐 بیت کوین</div>
-                <div class="price-val">${format_price(extract_price(btc))} <span class="unit-text">دلار</span></div>
-                <div class="badge {btc_info['status']}">
-                    <span>{btc_info['pct']}</span>
-                    <span>{btc_info['emoji']}</span>
-                </div>
-            </div>
-
-            <!-- اونس طلا -->
-            <div class="card {ons_info['status']}">
-                <div class="market-icon">{ons_info['emoji']}</div>
-                <div class="asset-name">🌍 اونس جهانی طلا</div>
-                <div class="price-val">${format_price(extract_price(ons))} <span class="unit-text">دلار</span></div>
-                <div class="badge {ons_info['status']}">
-                    <span>{ons_info['pct']}</span>
-                    <span>{ons_info['emoji']}</span>
-                </div>
-            </div>
-
-            <!-- شاخص بورس -->
-            <div class="card {bourse_info['status']}">
-                <div class="market-icon">{bourse_info['emoji']}</div>
-                <div class="asset-name">📊 {bourse_name}</div>
-                <div class="price-val">{format_price(extract_price(bourse))} <span class="unit-text">واحد</span></div>
-                <div class="badge {bourse_info['status']}">
-                    <span>{bourse_info['pct']}</span>
-                    <span>{bourse_info['emoji']}</span>
-                </div>
-            </div>
-        </div>
-
-        <div class="footer">
-            <span> استعلام لحظه‌ای ارز و طلا و بورس در ربات تلگرام و بله</span>
-            <span class="bot-id">@nerkhemroozchand_bot 🤖</span>
-        </div>
-    </body>
-    </html>
-    """
-    return html_content
-
-def render_graphic_image(html_content, output_path='market_graphic.png'):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 750})
-        page.set_content(html_content)
-        time.sleep(1.5)
-        page.screenshot(path=output_path)
-        browser.close()
-
-def build_caption(market, now):
-    shamsi_date = jdatetime.date.fromgregorian(date=now.date()).strftime("%Y/%m/%d")
-    time_str = now.strftime("%H:%M")
-
-    def line(key, label, unit):
-        item = get_asset_data(market, [key])
-        info = parse_change_info(item)
-        return f"{info['emoji']} {label}: {format_price(extract_price(item))} {unit}"
-
-    lines = [
-        line('usd', "دلار", "تومان"),
-        line('gold_18k', "طلای 18 عیار", "تومان"),
-        line('coin_emami', "سکه امامی", "تومان"),
-        line('gold_ounce', "اونس جهانی طلا", "دلار"),
-        line('btc', "بیت کوین", "دلار"),
-        line('oil_brent', "نفت برنت", "دلار"),
-        line('bourse_total', bourse_label(now), "واحد"),
-        "",
-        f"🗓 {shamsi_date} - {time_str}",
-    ]
-    if is_weekend_closed(now):
-        lines.append("🕒 بازار تعطیل است؛ نرخ‌ها مربوط به آخرین معامله است")
-    lines += [
-        "",
-        "⭕️ استعلام نرخ لحظه‌ای طلا، دلار، رمزارز و بورس"
-    ]
-    return "\n".join(lines)
-
-
-def send_photo_to_telegram(photo_path, caption):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
-        raise FatalError("توکن یا آیدی کانال تلگرام ست نشده است.")
-
-    keyboard = json.dumps({
-        "inline_keyboard": [
-            [
-                {"text": "🎯 تو پیش‌بینی کن!", "url": "https://t.me/pishbini_gheymat_bot"},
-                {"text": "🔎 نرخ لحظه‌ای بگیر!", "url": "https://t.me/nerkhemroozchand_bot"}
-            ]
-        ]
-    }, ensure_ascii=False)
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    payload = {
-        'chat_id': TELEGRAM_CHANNEL_ID,
-        'caption': caption,
-        'reply_markup': keyboard
-    }
-
-    log("در حال ارسال عکس به تلگرام...")
+if __name__ == "__main__":
     try:
-        with open(photo_path, 'rb') as photo:
-            res = requests.post(url, data=payload, files={'photo': photo}, timeout=25)
-    except requests.RequestException as e:
-        # پیام استثنای requests شامل URL (و توکن) است؛ قبل از چاپ ماسک می‌شود
-        raise FatalError(f"ارتباط با تلگرام ناموفق بود: {mask_secrets(e)}") from None
+        data = scrape_homepage_data()
 
-    if not res.ok:
-        # به‌جای raise_for_status (که URL را در پیام دارد) بدنهٔ پاسخ تلگرام را نشان می‌دهیم
-        raise FatalError(f"تلگرام خطا برگرداند (HTTP {res.status_code}): {mask_secrets(res.text)[:500]}")
-    log("✅ با موفقیت به تلگرام ارسال شد.")
+        bourse_total_item = fetch_bourse_total_index()
+        if bourse_total_item:
+            data.append(bourse_total_item)
 
-
-def run():
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
-        raise FatalError("توکن یا آیدی کانال تلگرام ست نشده است.")
-
-    # زمان فقط یک‌بار گرفته می‌شود و به تصویر و کپشن پاس داده می‌شود
-    now = datetime.now(TEHRAN_TZ)
-
-    log("۱. دریافت زنده داده‌ها از سایت اصلی...")
-    market_data = fetch_market_data()
-
-    problems = validate_market(market_data)
-    if problems:
-        raise FatalError("داده‌ها برای انتشار کامل/معتبر نیستند:\n  - " + "\n  - ".join(problems))
-
-    sanity_problems = check_sanity(market_data)
-    if sanity_problems:
-        msg = "تغییر مشکوک نسبت به پست قبلی:\n  - " + "\n  - ".join(sanity_problems)
-        if FORCE_POST:
-            log("⚠️ " + msg + "\n  (FORCE_POST=1 → ادامه می‌دهیم)")
+        if data:
+            update_database(data)
         else:
-            raise FatalError(msg + "\n  اگر تغییر واقعی است با FORCE_POST=1 دوباره اجرا کنید.")
-
-    log("۲. رندر تصویر گرافیکی...")
-    html_code = generate_graphic_html(market_data, now)
-    image_path = 'market_graphic.png'
-    render_graphic_image(html_code, image_path)
-
-    log("۳. ساخت کپشن و ارسال به پیام‌رسان‌ها...")
-    caption = build_caption(market_data, now)
-    send_photo_to_telegram(image_path, caption)
-
-    # فقط بعد از ارسال موفق، مبنای چک معقول‌بودن پست بعدی به‌روز می‌شود
-    save_last_state(market_data, now)
-
-
-def main():
-    try:
-        run()
-    except FatalError as e:
-        log(f"⛔ {e}")
-        sys.exit(1)
+            print("⚠️ هیچ داده‌ای در این اجرا استخراج نشد.", flush=True)
     except Exception as e:
-        log(f"❌ خطای پیش‌بینی‌نشده: {type(e).__name__}: {e}")
-        sys.exit(1)
-
-
-if __name__ == '__main__':
-    main()
+        print(f"❌ خطای غیرمنتظره در اجرای اسکریپت: {e}", flush=True)
