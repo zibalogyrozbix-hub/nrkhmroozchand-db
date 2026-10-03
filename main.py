@@ -10,8 +10,6 @@ import pytz
 import jdatetime
 from playwright.sync_api import sync_playwright
 
-
-
 try:
     import libsql_experimental as libsql
     HAS_LIBSQL = True
@@ -392,12 +390,6 @@ def is_real_data_table(table, header_cells) -> bool:
     return has_price_col and has_change_col
 
 def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> float | None:
-    """
-    فاصلهٔ (به دقیقه) زمان درج‌شده در ردیف جدول تا «اکنونِ تهران».
-    خروجی None یعنی «قابل تشخیص نیست» (و در اعتبارسنجی نادیده گرفته می‌شود).
-    پشتیبانی از: «همین الان/چند ثانیه پیش»، «X دقیقه/ساعت پیش»، «دیروز»،
-    ساعت ساده (HH:MM[:SS])، و تاریخ شمسی/میلادی (به‌همراه یا بدون ساعت).
-    """
     if not raw_time_str:
         return None
     text = to_english_digits(raw_time_str).strip()
@@ -419,7 +411,6 @@ def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> floa
     if "دیروز" in text:
         return 1440.0
 
-    # --- تاریخ (شمسی یا میلادی) ---
     row_date = None
     d_match = re.search(r'(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})', text)
     if d_match:
@@ -432,7 +423,6 @@ def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> floa
         except Exception:
             row_date = None
 
-    # --- ساعت ---
     t_match = re.search(r'(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)', text)
     hour = minute = second = None
     if t_match:
@@ -445,7 +435,6 @@ def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> floa
 
     if row_date is not None:
         if hour is None:
-            # فقط تاریخ: اگر امروز باشد از ساعتش خبر نداریم؛ اگر قدیمی‌تر باشد قطعاً کهنه است
             days = (today - row_date).days
             return float(days * 1440) if days > 0 else None
         row_dt = tehran_now.tzinfo.localize(
@@ -460,10 +449,8 @@ def parse_row_time_diff_minutes(raw_time_str: str, tehran_now: datetime) -> floa
     if hour is not None:
         row_dt = tehran_now.replace(hour=hour, minute=minute, second=second, microsecond=0)
         diff_min = (tehran_now - row_dt).total_seconds() / 60.0
-        # ساعتِ «چند دقیقه در آینده» = اختلاف جزئی ساعت سرور/سایت؛ نادیده
         if -10.0 <= diff_min < 0:
             return 0.0
-        # ساعتی که از «اکنون» جلوتر است یعنی مربوط به دیروز بوده
         if diff_min < 0:
             diff_min += 1440.0
         return diff_min
@@ -474,14 +461,10 @@ def scrape_homepage_data():
     tehran_tz = pytz.timezone('Asia/Tehran')
     MAX_SCRAPE_RETRIES = 3
     RETRY_WAIT_SECONDS = 5.0
-    MAX_ACCEPTABLE_TIME_DIFF_MINUTES = 45.0  # آستانه فاصله زمانی نامتعارف (۴۵ دقیقه)
-    # فقط در این دو حالت «انتظار و تلاش مجدد» ارزش دارد (ردیف‌های کم‌معامله مثل
-    # انس پلاتین یا سکه گرمی ممکن است به‌طور طبیعی بیش از ۴۵ دقیقه به‌روز نشوند):
-    #  ۱) یکی از نمادهای حیاتی کهنه باشد
-    #  ۲) درصد بالایی از کل ردیف‌ها کهنه باشد (نشانهٔ بارگذاری ناقص JS سایت)
+    MAX_ACCEPTABLE_TIME_DIFF_MINUTES = 45.0
     CRITICAL_KEYS = {"usd", "eur", "gold_18k", "coin_emami", "silver_gram", "btc"}
     SYSTEMIC_STALE_RATIO = 0.30
-    MIN_ROWS_FOR_RATIO_CHECK = 10  # برای نمونهٔ خیلی کوچک، درصد معنی‌دار نیست
+    MIN_ROWS_FOR_RATIO_CHECK = 10
 
     sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
     FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
@@ -506,7 +489,7 @@ def scrape_homepage_data():
             depth += 1
         return score
 
-    best_attempt = None  # (score, scraped_data, seen_header_texts, unrecognized_titles)
+    best_attempt = None
 
     for attempt in range(1, MAX_SCRAPE_RETRIES + 1):
         print(f"در حال دریافت داده‌ها از tgju.org (تلاش {attempt} از {MAX_SCRAPE_RETRIES}) ...", flush=True)
@@ -516,14 +499,11 @@ def scrape_homepage_data():
 
         try:
             html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0 * attempt)
-            # زمان مرجع «بعد از» رندر گرفته می‌شود، نه قبل از آن (رندر ~۱۵-۲۰ ثانیه طول می‌کشد)
             tehran_now = datetime.now(tehran_tz)
             updated_at = tehran_now.strftime("%Y-%m-%d %H:%M:%S")
             if html:
                 soup = BeautifulSoup(html, "html.parser")
 
-                # ریشهٔ باگ «دلار = 85,840 به‌جای 233,500»: تب‌های ارز کشورهای دیگر
-                # هم ردیف «دلار» دارند. ارزهای آزاد فقط از کانتینر ایران پذیرفته می‌شوند.
                 currency_container = soup.find(id="currency-overview-content")
                 if currency_container is not None:
                     currency_tables = set(currency_container.find_all("table"))
@@ -629,11 +609,9 @@ def scrape_homepage_data():
                             change_cell = cols[change_col_idx] if len(cols) > change_col_idx else None
                             change_amt, change_pct, change_num = parse_changes(change_cell, price_num)
 
-                            # استخراج زمان و محاسبه فاصله با زمان تهران
                             raw_row_time = get_cell_text(cols[time_col_idx]) if (time_col_idx != -1 and len(cols) > time_col_idx) else ""
                             time_diff_min = parse_row_time_diff_minutes(raw_row_time, tehran_now)
 
-                            # تبدیل قیمت از ریال به تومان برای نمادهای مشخص‌شده
                             if primary_key in TOMAN_SYMBOLS and price_num:
                                 price_num = price_num / 10
                                 price_str = format_number_with_comma(price_num)
@@ -657,7 +635,6 @@ def scrape_homepage_data():
         except Exception as e:
             print(f"خطا در استخراج (تلاش {attempt}): {e}", flush=True)
 
-        # ---------- اعتبارسنجی فاصله زمانی ----------
         timed = [i for i in scraped_data if i.get("_time_diff_min") is not None]
         stale_items = [i for i in timed if i["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES]
         critical_stale = [i for i in stale_items if i["symbol_key"] in CRITICAL_KEYS]
@@ -666,7 +643,6 @@ def scrape_homepage_data():
         def _names(items):
             return " | ".join(dict.fromkeys(i.get("title_fa") or i["symbol_key"] for i in items))
 
-        # نمرهٔ کیفیت این تلاش (کمتر = بهتر): بدون داده بدترین است
         score = (
             0 if scraped_data else 1,
             len(critical_stale),
@@ -727,7 +703,6 @@ def scrape_homepage_data():
         elif unique_data[key]["price"] == "-":
             unique_data[key] = item
 
-    # ضرب مقدار تغییرات رمزارزها در نرخ تومانی دلار
     usd_item = unique_data.get("usd")
     usd_price_toman = _to_float(usd_item["price"]) if usd_item else None
 
@@ -762,10 +737,6 @@ def scrape_homepage_data():
 
 
 def find_value_for_label(soup, labels):
-    """
-    جست‌وجوی مقدار مقابل یک برچسب (مثلا «نرخ فعلی») در جدول‌های اطلاعات
-    یک صفحه اختصاصی (profile) تک‌دارایی.
-    """
     for row in soup.find_all("tr"):
         cells = row.find_all(["th", "td"])
         if len(cells) < 2:
@@ -862,7 +833,6 @@ def get_db_connection():
 
 
 def write_data_json(accepted):
-    """ساخت/به‌روزرسانی snapshot استاتیک data.json از داده‌های پذیرفته‌شده"""
     json_path = "data.json"
     temp_path = f"{json_path}.tmp"
     try:
@@ -905,7 +875,6 @@ def update_database(data_list):
             )
         """)
 
-        # در صورتی که جدول قبلاً بدون ستون unit ساخته شده باشد، ستون را اضافه می‌کند
         try:
             cursor.execute("ALTER TABLE market_prices ADD COLUMN unit TEXT")
         except Exception:
@@ -1030,21 +999,44 @@ def update_database(data_list):
     except Exception as e:
         print(f"هشدار: محاسبهٔ گزارش داده‌های قدیمی ممکن نشد: {e}", flush=True)
 
-if __name__ == "__main__":
+
+def check_usd_change(scraped_data, json_file="last_usd.json") -> bool:
+    """
+    بررسی تغییر قیمت دلار نسبت به اجرای قبلی و ذخیره قیمت جدید در فایل last_usd.json
+    """
+    usd_item = next((item for item in scraped_data if item["symbol_key"] == "usd"), None)
+    if not usd_item:
+        print("⚠️ نماد دلار در داده‌های دریافت شده پیدا نشد.", flush=True)
+        return False
+
+    current_price = usd_item.get("price")
+    if not current_price or current_price == "-":
+        print("⚠️ قیمت دلار نامعتبر است.", flush=True)
+        return False
+
+    old_price = None
+
+    if os.path.exists(json_file):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                saved_data = json.load(f)
+                old_price = saved_data.get("price")
+        except Exception as e:
+            print(f"⚠️ خطا در خواندن {json_file}: {e}", flush=True)
+            old_price = None
+
     try:
-        data = scrape_homepage_data()
-
-        bourse_total_item = fetch_bourse_total_index()
-        if bourse_total_item:
-            data.append(bourse_total_item)
-
-        if data:
-            update_database(data)
-        else:
-            print("⚠️ هیچ داده‌ای در این اجرا استخراج نشد.", flush=True)
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump({"price": current_price, "updated_at": usd_item.get("updated_at")}, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"❌ خطای غیرمنتظره در اجرای اسکریپت: {e}", flush=True)
+        print(f"⚠️ خطا در ذخیره {json_file}: {e}", flush=True)
 
+    if old_price is not None and old_price != current_price:
+        print(f"🔄 تغییر قیمت دلار شناسایی شد! قیمت قبلی: {old_price} | قیمت جدید: {current_price}", flush=True)
+        return True
+    
+    print(f"ℹ️️ قیمت دلار تغییری نکرده است ({current_price}).", flush=True)
+    return False
 
 
 def check_and_trigger_project_2(has_price_changed: bool):
@@ -1057,17 +1049,16 @@ def check_and_trigger_project_2(has_price_changed: bool):
     start_time = datetime.strptime("10:00", "%H:%M").time()
     end_time = datetime.strptime("11:20", "%H:%M").time()
 
-    # اگر زمان فعلی بین ۱۰:۰۰ تا ۱۱:۲۰ باشد و قیمت تغییر کرده باشد
     if start_time <= now <= end_time:
         if has_price_changed:
-            print("\n🚀 تغییر قیمت در بازه ۱۰:۰۰ تا ۱۱:۲۰ شناسایی شد. در حال ارسال دستور به پروژه دوم...")
+            print("\n🚀 تغییر قیمت در بازه ۱۰:۰۰ تا ۱۱:۲۰ شناسایی شد. در حال ارسال دستور به پروژه دوم...", flush=True)
             
-            REPO_OWNER = "Rozbix"  # نام کاربری پروژه دوم
-            REPO_NAME = "nerkhemroozchand-NEW"      # نام ریپازیتوری پروژه دوم
+            REPO_OWNER = "Rozbix"
+            REPO_NAME = "nerkhemroozchand-NEW"
             GITHUB_TOKEN = os.getenv("GH_PAT")
 
             if not GITHUB_TOKEN:
-                print("❌ خطا: متغیر GH_PAT یافت نشد.")
+                print("❌ خطا: متغیر GH_PAT یافت نشد.", flush=True)
                 return
 
             url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
@@ -1080,19 +1071,37 @@ def check_and_trigger_project_2(has_price_changed: bool):
             try:
                 res = requests.post(url, json=data, headers=headers)
                 if res.status_code == 204:
-                    print("✅ پروژه دوم با موفقیت تریگر شد.")
+                    print("✅ پروژه دوم با موفقیت تریگر شد.", flush=True)
                 else:
-                    print(f"❌ خطا در ارسال درخواست: {res.status_code} - {res.text}")
+                    print(f"❌ خطا در ارسال درخواست: {res.status_code} - {res.text}", flush=True)
             except Exception as e:
-                print(f"❌ خطای ارتباطی: {e}")
+                print(f"❌ خطای ارتباطی: {e}", flush=True)
         else:
-            print("\nℹ️ در بازه ۱۰:۰۰ تا ۱۱:۲۰ هستیم اما تغییری در قیمت رخ نداده است.")
+            print("\nℹ️ در بازه ۱۰:۰۰ تا ۱۱:۲۰ هستیم اما تغییری در قیمت رخ نداده است.", flush=True)
+    else:
+        print(f"\nℹ️ زمان فعلی ({now.strftime('%H:%M')}) خارج از بازه ۱۰:۰۰ تا ۱۱:۲۰ است.", flush=True)
 
-# ۲. در آخرین خطوط اجرای main (بعد از پایان اسکرپ و ذخیره دیتابیس):
+
 if __name__ == "__main__":
-    # کدهای اصلی اسکرپت اجرا میشن...
-    # فرض کنیم متغیر price_changed نشان‌دهنده تغییر قیمت دلار باشه:
-    price_changed = True  # یا منطق بررسی تغییر قیمت خودت
-    
-    # فراخوانی تابع در انتهای کار:
-    check_and_trigger_project_2(has_price_changed=price_changed)
+    try:
+        # ۱. اسکرپ داده‌های اصلی
+        data = scrape_homepage_data()
+
+        # ۲. دریافت شاخص کل بورس
+        bourse_total_item = fetch_bourse_total_index()
+        if bourse_total_item:
+            data.append(bourse_total_item)
+
+        if data:
+            # ۳. بررسی تغییر قیمت دلار نسبت به اجرای قبلی
+            price_changed = check_usd_change(data)
+
+            # ۴. آپدیت دیتابیس و فایل data.json
+            update_database(data)
+
+            # ۵. بررسی زمان و ارسال دستور به پروژه دوم
+            check_and_trigger_project_2(has_price_changed=price_changed)
+        else:
+            print("⚠️ هیچ داده‌ای در این اجرا استخراج نشد.", flush=True)
+    except Exception as e:
+        print(f"❌ خطای غیرمنتظره در اجرای اسکریپت: {e}", flush=True)
