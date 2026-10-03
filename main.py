@@ -10,6 +10,8 @@ import pytz
 import jdatetime
 from playwright.sync_api import sync_playwright
 
+
+
 try:
     import libsql_experimental as libsql
     HAS_LIBSQL = True
@@ -1042,3 +1044,55 @@ if __name__ == "__main__":
             print("⚠️ هیچ داده‌ای در این اجرا استخراج نشد.", flush=True)
     except Exception as e:
         print(f"❌ خطای غیرمنتظره در اجرای اسکریپت: {e}", flush=True)
+
+
+
+def check_and_trigger_project_2(has_price_changed: bool):
+    """
+    بررسی زمان و تریگر کردن پروژه دوم در صورت تغییر قیمت در بازه 10:00 تا 11:20
+    """
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    now = datetime.now(tehran_tz).time()
+    
+    start_time = datetime.strptime("10:00", "%H:%M").time()
+    end_time = datetime.strptime("11:20", "%H:%M").time()
+
+    # اگر زمان فعلی بین ۱۰:۰۰ تا ۱۱:۲۰ باشد و قیمت تغییر کرده باشد
+    if start_time <= now <= end_time:
+        if has_price_changed:
+            print("\n🚀 تغییر قیمت در بازه ۱۰:۰۰ تا ۱۱:۲۰ شناسایی شد. در حال ارسال دستور به پروژه دوم...")
+            
+            REPO_OWNER = "Rozbix"  # نام کاربری پروژه دوم
+            REPO_NAME = "nerkhemroozchand-NEW"      # نام ریپازیتوری پروژه دوم
+            GITHUB_TOKEN = os.getenv("GH_PAT")
+
+            if not GITHUB_TOKEN:
+                print("❌ خطا: متغیر GH_PAT یافت نشد.")
+                return
+
+            url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
+            headers = {
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            data = {"event_type": "usd_price_changed"}
+
+            try:
+                res = requests.post(url, json=data, headers=headers)
+                if res.status_code == 204:
+                    print("✅ پروژه دوم با موفقیت تریگر شد.")
+                else:
+                    print(f"❌ خطا در ارسال درخواست: {res.status_code} - {res.text}")
+            except Exception as e:
+                print(f"❌ خطای ارتباطی: {e}")
+        else:
+            print("\nℹ️ در بازه ۱۰:۰۰ تا ۱۱:۲۰ هستیم اما تغییری در قیمت رخ نداده است.")
+
+# ۲. در آخرین خطوط اجرای main (بعد از پایان اسکرپ و ذخیره دیتابیس):
+if __name__ == "__main__":
+    # کدهای اصلی اسکرپت اجرا میشن...
+    # فرض کنیم متغیر price_changed نشان‌دهنده تغییر قیمت دلار باشه:
+    price_changed = True  # یا منطق بررسی تغییر قیمت خودت
+    
+    # فراخوانی تابع در انتهای کار:
+    check_and_trigger_project_2(has_price_changed=price_changed)
