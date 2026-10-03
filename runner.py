@@ -9,21 +9,45 @@ from main import scrape_homepage_data
 
 TEHRAN_TZ = pytz.timezone('Asia/Tehran')
 
+import os
+import requests
+
 def trigger_project_2():
     """
-    اجرای پروژه دوم پس از مشاهده اولین تغییر
+    ارسال دستور اجرا به گیت‌هاب پروژه دوم از طریق GitHub API
     """
     print("\n🚀 اولین تغییر قیمت در بازه ۱۰ تا ۱۱:۲۰ مشاهده شد!")
-    print("در حال فراخوانی پروژه دوم...")
-    
-    # نحوه اجرا بر اساس نوع پروژه دوم شما:
-    # ۱) اگر پروژه دوم یک فایل پایتون مجزاست:
-    subprocess.run(["python", "project2.py"])
-    
-    # ۲) اگر پروژه دوم با API یا Webhook کار می‌کند (نمونه):
-    # requests.post("https://your-api-endpoint.com/trigger")
+    print("در حال ارسال دستور اجرا به گیت‌هاب پروژه دوم...")
 
+    # اطلاعات پروژه دوم را اینجا وارد کن:
+    REPO_OWNER = "Rozbix"  # نام کاربری اکانت پروژه دوم در گیت‌هاب
+    REPO_NAME = "nerkhemroozchand-NEW"      # نام ریپازیتوری پروژه دوم
+    
+    # توکنی که در قدم دوم ساختی را اینجا قرار بده (یا از Secrets بخوان)
+    GITHUB_TOKEN = os.getenv("GH_PAT")
 
+    if not GITHUB_TOKEN:
+        print("❌ خطا: متغیر محیطی GH_PAT یافت نشد! مطمئن شوید Secret را در گیت‌هاب تعریف کرده‌اید.")
+        return
+
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    data = {
+        "event_type": "usd_price_changed"
+    }
+
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 204:
+            print("✅ دستور اجرا با موفقیت به گیت‌هاب پروژه دوم ارسال شد و اکشن شروع به کار کرد.")
+        else:
+            print(f"❌ خطا در ارسال دستور به گیت‌هاب. کد وضعیت: {response.status_code}")
+            print(f"پاسخ گیت‌هاب: {response.text}")
+    except Exception as e:
+        print(f"❌ خطای ارتباطی در ارسال درخواست: {e}")
 def extract_price_map(data_list: list) -> dict:
     """
     تبدیل خروجی اسکرپر به یک دیکشنری ساده از (نماد -> قیمت) برای مقایسه سریع
