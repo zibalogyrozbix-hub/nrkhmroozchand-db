@@ -2,14 +2,8 @@ name: TGJU Market Data Scraper
 
 on:
   schedule:
-    # ساعت 06:25 به وقت UTC معادل 09:55 به وقت تهران است (۵ دقیقه قبل از شروع بازه ۱۰:۰۰)
-    - cron: '25 6 * * *'
+    - cron: '*/10 * * * *'  # اجرای خودکار هر 10 دقیقه
   workflow_dispatch:        # قابلیت اجرای دستی از تب Actions
-
-# جلوگیری از اجرای همزمان دو نسخه از اکشن
-concurrency:
-  group: price-monitoring
-  cancel-in-progress: true
 
 jobs:
   scrape-and-update:
@@ -30,13 +24,13 @@ jobs:
           pip install playwright requests pytz
           playwright install --with-deps chromium
 
-      - name: Run Price Monitor Runner
+      - name: Run Scraper
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          python runner.py
+          python main.py
 
       - name: Prepare Public Assets
         run: |
