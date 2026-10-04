@@ -1066,7 +1066,40 @@ def detect_usd_change(update_result) -> bool:
     print(f"ℹ️ قیمت دلار تغییری نکرده است ({new_price}).", flush=True)
     return False
 
+def _trigger_already_sent(day: str) -> bool:
+    """آیا تریگر پروژه دوم برای این روز قبلاً با موفقیت ارسال شده؟"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS project2_triggers (trigger_date TEXT PRIMARY KEY)")
+        row = cur.execute("SELECT 1 FROM project2_triggers WHERE trigger_date = ?", (day,)).fetchone()
+        return row is not None
+    except Exception as e:
+        print(f"⚠️ خواندن وضعیت تریگر ممکن نشد: {e}", flush=True)
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
+
+def _mark_trigger_sent(day: str):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS project2_triggers (trigger_date TEXT PRIMARY KEY)")
+        cur.execute("INSERT OR IGNORE INTO project2_triggers (trigger_date) VALUES (?)", (day,))
+        conn.commit()
+    except Exception as e:
+        print(f"⚠️ ثبت وضعیت تریگر ممکن نشد: {e}", flush=True)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 def check_and_trigger_project_2(has_price_changed: bool):
     """
     در صورت تغییر قیمت دلار در بازهٔ ۱۰:۰۰ تا ۱۱:۲۰ (به وقت تهران)، پروژهٔ دوم را با repository_dispatch تریگر می‌کند.
@@ -1084,7 +1117,12 @@ def check_and_trigger_project_2(has_price_changed: bool):
     if not has_price_changed:
         print("\nℹ️ در بازه ۱۰:۰۰ تا ۱۱:۲۰ هستیم اما تغییری در قیمت دلار رخ نداده است.", flush=True)
         return
-
+        
+    today_str = datetime.now(tehran_tz).strftime("%Y-%m-%d")
+    if _trigger_already_sent(today_str):
+        print("ℹ️ تریگر امروز قبلاً ارسال شده؛ دوباره ارسال نمی‌شود.", flush=True)
+        return
+        
     print("\n🚀 تغییر قیمت در بازه ۱۰:۰۰ تا ۱۱:۲۰ شناسایی شد. در حال ارسال دستور به پروژه دوم...", flush=True)
 
     REPO_OWNER = "Rozbix"
@@ -1107,6 +1145,7 @@ def check_and_trigger_project_2(has_price_changed: bool):
         res = requests.post(url, json=data, headers=headers, timeout=15)
         if res.status_code == 204:
             print("✅ پروژه دوم با موفقیت تریگر شد.", flush=True)
+            _mark_trigger_sent(today_str)
         else:
             print(f"❌ خطا در ارسال درخواست: {res.status_code} - {res.text}", flush=True)
     except Exception as e:
