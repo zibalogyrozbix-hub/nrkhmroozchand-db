@@ -213,6 +213,22 @@ FREE_MARKET_CURRENCY_KEYS = {
 SANITY_DIGIT_DIFF_THRESHOLD = 3
 SANITY_PERCENT_WARN_THRESHOLD = 50.0
 
+# نمادهای حیاتی: اگر مقدار قبلی‌شان «ساعت‌دار» ثبت شده بود و مقدار جدید بدون ساعت (مثلاً فقط «۱۱ مهر»)
+# و با قیمتی متفاوت آمد، احتمال کش‌بودن/ناقص‌بودن صفحه هست و مقدار قبلی نگه داشته می‌شود.
+HOLD_CRITICAL_KEYS = {"usd", "eur", "gold_18k", "coin_emami", "silver_gram", "btc"}
+HOLD_MAX_HOURS = 6.0  # بیش از این مدت نگه نمی‌داریم تا سیستم برای همیشه قفل نشود
+
+_RELATIVE_TIME_WORDS = ("همین الان", "همین الآن", "چند ثانیه", "لحظاتی", "دقایقی", "دقیقه", "ساعت", "ثانیه")
+
+def has_time_info(raw_time) -> bool:
+    """آیا متن ستون زمان ردیف، ساعت واقعی (HH:MM) یا زمان نسبی («X دقیقه پیش») دارد؟ «۱۱ مهر» ندارد."""
+    if not raw_time:
+        return False
+    text = to_english_digits(str(raw_time))
+    if re.search(r'(?<!\d)\d{1,2}:\d{2}', text):
+        return True
+    return any(w in text for w in _RELATIVE_TIME_WORDS)
+
 def _to_float(price_str) -> float | None:
     if not price_str or price_str == "-":
         return None
@@ -682,7 +698,8 @@ def scrape_homepage_data():
                                     "change_num": change_num,
                                     "updated_at": updated_at,
                                     "_affinity": table_currency_affinity + usd_slug_bonus,
-                                    "_time_diff_min": time_diff_min
+                                    "_time_diff_min": time_diff_min,
+                                    "row_time": raw_row_time
                                 })
         except Exception as e:
             print(f"خطا در استخراج (تلاش {attempt}): {e}", flush=True)
@@ -903,7 +920,8 @@ def write_data_json(accepted):
     json_path = "data.json"
     temp_path = f"{json_path}.tmp"
     try:
-        sorted_json_data = sorted(accepted, key=lambda x: x.get("title_fa", ""))
+        clean_items = [{k: v for k, v in x.items() if k != "row_time"} for x in accepted]
+        sorted_json_data = sorted(clean_items, key=lambda x: x.get("title_fa", ""))
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(sorted_json_data, f, ensure_ascii=False, indent=2)
             f.write("\n")
@@ -949,8 +967,14 @@ def update_database(data_list):
         except Exception:
             pass
 
+        # متن خام ستون «زمان» ردیف (برای تشخیص ساعت‌دار/بی‌ساعت بودن مقدار ذخیره‌شده)
+        try:
+            cursor.execute("ALTER TABLE market_prices ADD COLUMN row_time TEXT")
+        except Exception:
+            pass
+
         for row in cursor.execute(
-            "SELECT symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at FROM market_prices"
+            "SELECT symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at, row_time FROM market_prices"
         ).fetchall():
             existing_rows[row[0]] = {
                 "symbol_key": row[0],
@@ -960,12 +984,15 @@ def update_database(data_list):
                 "change_amount": row[4],
                 "change_percent": row[5],
                 "updated_at": row[6],
+                "row_time": row[7],
             }
     except Exception as e:
         print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
 
     accepted = []
     rejected_anomalies = []
+    held_back = []
+    _tz = pytz.timezone('Asia/Tehran')
 
     for item in data_list:
         old = existing_rows.get(item["symbol_key"])
@@ -990,6 +1017,39 @@ def update_database(data_list):
                     flush=True,
                 )
 
+        # نگه‌داشتن مقدار قبلی: نماد حیاتی + قبلی ساعت‌دار + جدید بی‌ساعت + قیمت متفاوت + قبلی تازه
+        if (
+            item["symbol_key"] in HOLD_CRITICAL_KEYS
+            and old
+            and has_time_info(old.get("row_time"))
+            and not has_time_info(item.get("row_time"))
+            and item["price"] != old["price"]
+        ):
+            try:
+                old_dt = _tz.localize(datetime.strptime(old["updated_at"], "%Y-%m-%d %H:%M:%S"))
+                old_age_h = (datetime.now(_tz) - old_dt).total_seconds() / 3600
+            except (ValueError, TypeError):
+                old_age_h = None
+            if old_age_h is not None and old_age_h <= HOLD_MAX_HOURS:
+                held_back.append({
+                    "symbol_key": item["symbol_key"],
+                    "title_fa": item["title_fa"],
+                    "old_price": old["price"],
+                    "new_price": item["price"],
+                    "new_time": item.get("row_time", ""),
+                })
+                continue
+
+        # قیمت یکسان ولی بدون ساعت: وضعیت «ساعت‌دار» قبلی را حفظ می‌کنیم تا قفل نگه‌داشتن از بین نرود
+        if (
+            old
+            and item["symbol_key"] in HOLD_CRITICAL_KEYS
+            and has_time_info(old.get("row_time"))
+            and not has_time_info(item.get("row_time"))
+            and item["price"] == old["price"]
+        ):
+            item["row_time"] = old["row_time"]
+
         accepted.append(item)
 
     complete_snapshot = dict(existing_rows)
@@ -1001,15 +1061,16 @@ def update_database(data_list):
         try:
             for item in accepted:
                 cursor.execute("""
-                    INSERT INTO market_prices (symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO market_prices (symbol_key, title_fa, price, unit, change_amount, change_percent, updated_at, row_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(symbol_key) DO UPDATE SET
                         title_fa = excluded.title_fa,
                         price = excluded.price,
                         unit = excluded.unit,
                         change_amount = excluded.change_amount,
                         change_percent = excluded.change_percent,
-                        updated_at = excluded.updated_at
+                        updated_at = excluded.updated_at,
+                        row_time = excluded.row_time
                 """, (
                     item["symbol_key"],
                     item["title_fa"],
@@ -1017,7 +1078,8 @@ def update_database(data_list):
                     item["unit"],
                     item["change_amount"],
                     item["change_percent"],
-                    item["updated_at"]
+                    item["updated_at"],
+                    item.get("row_time", "")
                 ))
 
             conn.commit()
@@ -1032,6 +1094,14 @@ def update_database(data_list):
                 pass
     else:
         print("ℹ️ دیتابیس در دسترس نبود اما data.json با موفقیت به‌روزرسانی شد.", flush=True)
+
+    if held_back:
+        print(f"\n⏸️ {len(held_back)} نماد حیاتی به‌دلیل «مقدار جدید بدون ساعت» نگه داشته شد (مقدار قبلی ساعت‌دار حفظ شد):", flush=True)
+        for h in held_back:
+            print(
+                f"   - {h['symbol_key']} ({h['title_fa']}): نگه‌داشته {h['old_price']} <- دیده‌شده (نادیده) {h['new_price']} [زمان: {h['new_time'] or '-'}]",
+                flush=True,
+            )
 
     if rejected_anomalies:
         print(f"\n🚫 {len(rejected_anomalies)} مورد به دلیل جهش رقمی مشکوک رد شدند:", flush=True)
