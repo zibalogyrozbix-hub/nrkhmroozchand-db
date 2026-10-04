@@ -1176,7 +1176,11 @@ def detect_usd_change(update_result) -> bool:
     return False
 
 def _trigger_already_sent(day: str) -> bool:
-    """آیا تریگر پروژه دوم برای این روز قبلاً با موفقیت ارسال شده؟"""
+    """
+    آیا تریگر پروژه دوم برای این روز قبلاً با موفقیت ارسال شده؟
+    اگر وضعیت قابل خواندن نباشد True برمی‌گرداند (محافظه‌کارانه) تا با خرابی دیتابیس،
+    تریگر تکراری و پست‌های تکراری ارسال نشود.
+    """
     conn = None
     try:
         conn = get_db_connection()
@@ -1185,8 +1189,8 @@ def _trigger_already_sent(day: str) -> bool:
         row = cur.execute("SELECT 1 FROM project2_triggers WHERE trigger_date = ?", (day,)).fetchone()
         return row is not None
     except Exception as e:
-        print(f"⚠️ خواندن وضعیت تریگر ممکن نشد: {e}", flush=True)
-        return False
+        print(f"⚠️ خواندن وضعیت تریگر ممکن نشد ({e}) — برای جلوگیری از ارسال تکراری، تریگر ارسال نمی‌شود.", flush=True)
+        return True
     finally:
         try:
             conn.close()
@@ -1194,53 +1198,36 @@ def _trigger_already_sent(day: str) -> bool:
             pass
 
 
-def _mark_trigger_sent(day: str):
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS project2_triggers (trigger_date TEXT PRIMARY KEY)")
-        cur.execute("INSERT OR IGNORE INTO project2_triggers (trigger_date) VALUES (?)", (day,))
-        conn.commit()
-    except Exception as e:
-        print(f"⚠️ ثبت وضعیت تریگر ممکن نشد: {e}", flush=True)
-    finally:
+def _mark_trigger_sent(day: str) -> bool:
+    """ثبت ارسال موفق تریگر امروز؛ در صورت خطا یک بار دیگر تلاش می‌کند."""
+    for attempt in (1, 2):
+        conn = None
         try:
-            conn.close()
-        except Exception:
-            pass
-def check_and_trigger_project_2(has_price_changed: bool):
-    """
-    در صورت تغییر قیمت دلار در بازهٔ ۱۰:۰۰ تا ۱۱:۲۰ (به وقت تهران)، پروژهٔ دوم را با repository_dispatch تریگر می‌کند.
-    """
-    tehran_tz = pytz.timezone('Asia/Tehran')
-    now = datetime.now(tehran_tz).time()
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("CREATE TABLE IF NOT EXISTS project2_triggers (trigger_date TEXT PRIMARY KEY)")
+            cur.execute("INSERT OR IGNORE INTO project2_triggers (trigger_date) VALUES (?)", (day,))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"⚠️ ثبت وضعیت تریگر ممکن نشد (تلاش {attempt} از 2): {e}", flush=True)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return False
 
-    start_time = datetime.strptime("10:00", "%H:%M").time()
-    end_time = datetime.strptime("11:20", "%H:%M").time()
 
-    if not (start_time <= now <= end_time):
-        print(f"\nℹ️ زمان فعلی ({now.strftime('%H:%M')}) خارج از بازه ۱۰:۰۰ تا ۱۱:۲۰ است.", flush=True)
-        return
-
-    if not has_price_changed:
-        print("\nℹ️ در بازه ۱۰:۰۰ تا ۱۱:۲۰ هستیم اما تغییری در قیمت دلار رخ نداده است.", flush=True)
-        return
-        
-    today_str = datetime.now(tehran_tz).strftime("%Y-%m-%d")
-    if _trigger_already_sent(today_str):
-        print("ℹ️ تریگر امروز قبلاً ارسال شده؛ دوباره ارسال نمی‌شود.", flush=True)
-        return
-        
-    print("\n🚀 تغییر قیمت در بازه ۱۰:۰۰ تا ۱۱:۲۰ شناسایی شد. در حال ارسال دستور به پروژه دوم...", flush=True)
-
+def _send_project_2_dispatch(reason: str) -> bool:
+    """ارسال repository_dispatch به پروژه دوم. موفقیت = کد ۲۰۴."""
     REPO_OWNER = "Rozbix"
     REPO_NAME = "nerkhemroozchand-NEW"
     GITHUB_TOKEN = os.getenv("GH_PAT")
 
     if not GITHUB_TOKEN:
         print("❌ خطا: متغیر GH_PAT یافت نشد.", flush=True)
-        return
+        return False
 
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
     headers = {
@@ -1248,17 +1235,63 @@ def check_and_trigger_project_2(has_price_changed: bool):
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    data = {"event_type": "usd_price_changed"}
+    # event_type ثابت می‌ماند تا workflow پروژه دوم نیازی به تغییر نداشته باشد؛ دلیل ارسال در client_payload است
+    data = {"event_type": "usd_price_changed", "client_payload": {"reason": reason}}
 
     try:
         res = requests.post(url, json=data, headers=headers, timeout=15)
         if res.status_code == 204:
             print("✅ پروژه دوم با موفقیت تریگر شد.", flush=True)
-            _mark_trigger_sent(today_str)
-        else:
-            print(f"❌ خطا در ارسال درخواست: {res.status_code} - {res.text}", flush=True)
+            return True
+        print(f"❌ خطا در ارسال درخواست: {res.status_code} - {res.text}", flush=True)
     except Exception as e:
         print(f"❌ خطای ارتباطی: {e}", flush=True)
+    return False
+
+
+def check_and_trigger_project_2(has_price_changed: bool):
+    """
+    تریگر پروژهٔ دوم (حداکثر یک بار در روز، به وقت تهران):
+      ۱) اولین تغییر قیمت دلار در بازهٔ ۱۰:۰۰ تا ۱۱:۲۰ → تریگر فوری.
+      ۲) اگر تا ۱۱:۲۰ تغییری نیامده بود → اولین اجرای بعد از ۱۱:۲۰ تریگر پیش‌فرض می‌فرستد
+         (حتی بدون تغییر قیمت)، تا ساعت ۱۷:۰۰ که پایان پست‌های ساعتی است.
+    """
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    now = datetime.now(tehran_tz).time()
+
+    start_time = datetime.strptime("10:00", "%H:%M").time()
+    end_time = datetime.strptime("11:20", "%H:%M").time()
+    cutoff_time = datetime.strptime("17:00", "%H:%M").time()
+
+    if now < start_time:
+        print(f"\nℹ️ زمان فعلی ({now.strftime('%H:%M')}) پیش از ۱۰:۰۰ است؛ تریگر پروژه دوم بررسی نمی‌شود.", flush=True)
+        return
+
+    if now > cutoff_time:
+        print(f"\nℹ️ زمان فعلی ({now.strftime('%H:%M')}) پس از ۱۷:۰۰ است؛ تریگر پروژه دوم ارسال نمی‌شود.", flush=True)
+        return
+
+    in_change_window = now <= end_time
+
+    if in_change_window and not has_price_changed:
+        print("\nℹ️ در بازه ۱۰:۰۰ تا ۱۱:۲۰ هستیم اما تغییری در قیمت دلار رخ نداده است (در صورت نبود تغییر، بعد از ۱۱:۲۰ تریگر پیش‌فرض ارسال می‌شود).", flush=True)
+        return
+
+    if in_change_window:
+        reason = "usd_price_changed"
+        print("\n🚀 تغییر قیمت در بازه ۱۰:۰۰ تا ۱۱:۲۰ شناسایی شد. در حال ارسال دستور به پروژه دوم...", flush=True)
+    else:
+        reason = "default_after_1120"
+        print("\n⏰ ساعت از ۱۱:۲۰ گذشته است؛ در صورت ارسال‌نشدن تریگر امروز، تریگر پیش‌فرض ارسال می‌شود...", flush=True)
+
+    today_str = datetime.now(tehran_tz).strftime("%Y-%m-%d")
+    if _trigger_already_sent(today_str):
+        print("ℹ️ تریگر امروز قبلاً ارسال شده (یا وضعیتش نامشخص است)؛ دوباره ارسال نمی‌شود.", flush=True)
+        return
+
+    if _send_project_2_dispatch(reason):
+        if not _mark_trigger_sent(today_str):
+            print("🚨 هشدار: تریگر ارسال شد ولی ثبتش در دیتابیس ممکن نشد؛ اجرای بعدی ممکن است دوباره ارسال کند.", flush=True)
 
 
 if __name__ == "__main__":
