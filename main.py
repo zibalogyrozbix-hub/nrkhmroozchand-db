@@ -484,6 +484,9 @@ def scrape_homepage_data():
     sorted_targets = sorted(SYMBOL_MAP.keys(), key=len, reverse=True)
     FREE_MARKET_LABELS = ("ارز آزاد", "ارز ازاد")
     OFFICIAL_RATE_LABELS = ("نیمایی", "مبادله")
+    NON_FREE_HEADER_WORDS = ("مبادله", "دولتی", "نیما", "حواله", "سنا", "مرکز")
+    # آدرس پروفایل نرخ دلارِ بازار آزاد در tgju.org؛ دلار فقط با تأیید این لینک در ردیف، «قطعی» پذیرفته می‌شود
+    FREE_USD_PROFILE_SLUG = "price_dollar_rl"
     TIME_HEADER_PATTERNS = ["زمان", "ساعت", "تاریخ", "تایم", "بروزرسانی", "زمان بروزرسانی"]
 
     def _currency_table_affinity(tbl):
@@ -541,6 +544,14 @@ def scrape_homepage_data():
 
                     seen_header_texts.append(" ".join(get_cell_text(c) for c in header_cells))
 
+                    # قفل قطعی ارز آزاد: فقط جدولی که اولین سرستونش «ارز آزاد» است پذیرفته می‌شود.
+                    # جدول‌های «ارز مبادله‌ای / دولتی»، «نرخ ارز نیما (حواله)» و مرکز مبادله رد می‌شوند.
+                    header_first = clean_title(get_cell_text(header_cells[0])) if header_cells else ""
+                    table_is_free_currency = (
+                        any(lbl in header_first for lbl in FREE_MARKET_LABELS)
+                        and not any(bad in header_first for bad in NON_FREE_HEADER_WORDS)
+                    )
+
                     if not is_real_data_table(table, header_cells):
                         continue
 
@@ -586,6 +597,27 @@ def scrape_homepage_data():
                                 and table not in currency_tables
                             ):
                                 matched_fa = None
+
+                        usd_slug_bonus = 0
+                        if matched_fa:
+                            primary_key = SYMBOL_MAP[matched_fa][0]
+                            if primary_key in FREE_MARKET_CURRENCY_KEYS:
+                                if not table_is_free_currency:
+                                    matched_fa = None
+                                elif primary_key == "usd":
+                                    # «دلار آمریکا» (نرخ دولتی) نباید با «دلار» اشتباه گرفته شود
+                                    if row_title != clean_title("دلار"):
+                                        matched_fa = None
+                                    else:
+                                        row_links = [a.get("href", "") for a in row.find_all("a", href=True)]
+                                        if any(FREE_USD_PROFILE_SLUG in h for h in row_links):
+                                            usd_slug_bonus = 100
+                                        else:
+                                            print(
+                                                "⚠️ هشدار: ردیف «دلار» در جدول ارز آزاد پیدا شد ولی لینک "
+                                                f"{FREE_USD_PROFILE_SLUG} در آن نبود (فقط با قفل سرستون پذیرفته شد).",
+                                                flush=True,
+                                            )
 
                         if matched_fa:
                             symbol_keys = SYMBOL_MAP[matched_fa]
@@ -649,7 +681,7 @@ def scrape_homepage_data():
                                     "change_percent": change_pct,
                                     "change_num": change_num,
                                     "updated_at": updated_at,
-                                    "_affinity": table_currency_affinity,
+                                    "_affinity": table_currency_affinity + usd_slug_bonus,
                                     "_time_diff_min": time_diff_min
                                 })
         except Exception as e:
@@ -736,6 +768,13 @@ def scrape_homepage_data():
                 if raw_change != 0:
                     toman_change = raw_change * usd_price_toman
                     item["change_amount"] = format_number_with_comma(toman_change)
+
+    if "usd" not in unique_data:
+        print(
+            "🚨 هشدار جدی: نرخ دلارِ بازار آزاد (جدول «ارز آزاد»، لینک price_dollar_rl) پیدا نشد؛ "
+            "مقدار قبلی دلار در دیتابیس دست‌نخورده می‌ماند و تریگر پروژه دوم ارسال نمی‌شود.",
+            flush=True,
+        )
 
     for item in unique_data.values():
         item.pop("price_num", None)
