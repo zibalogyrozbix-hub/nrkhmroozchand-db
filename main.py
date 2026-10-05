@@ -244,7 +244,69 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def fetch_rendered_html(url: str, extra_wait: float = 3.0) -> str | None:
+# --- انتظار هوشمند برای تازه‌شدن جدول قیمت‌ها ---
+# صفحهٔ اصلی tgju گاهی ابتدا اعداد کش‌شدهٔ قدیمی (مثلاً ۴۵ دقیقه قبل) را نشان می‌دهد و چند ثانیه بعد
+# اعداد زنده جایگزین می‌شوند. به‌جای مکث ثابت، زمان ردیف «دلار» جدول ارز آزاد را پایش می‌کنیم.
+FRESH_TARGET_MINUTES = 15.0       # ردیف دلار تا این فاصله از «اکنون» تازه حساب می‌شود
+FRESH_POLL_SECONDS = 1.5          # فاصلهٔ نمونه‌برداری از صفحه
+FRESH_STABLE_SECONDS = 12.0       # اگر زمان ردیف این‌قدر تغییر نکرد، قدیمیِ واقعی (بازار ساکن) فرض می‌شود
+FRESH_MAX_SECONDS = 25.0          # سقف کل انتظار
+
+def _extract_free_usd_row_time(html: str) -> str | None:
+    """متن ستون «زمان» ردیف «دلار» در جدول «ارز آزاد»؛ اگر جدول/ردیف پیدا نشد None."""
+    soup = BeautifulSoup(html, "html.parser")
+    for table in soup.find_all("table"):
+        header_tr = table.find("tr")
+        header_cells = header_tr.find_all(["th", "td"]) if header_tr else []
+        if not header_cells:
+            continue
+        first = clean_title(get_cell_text(header_cells[0]))
+        if not any(lbl in first for lbl in ("ارز آزاد", "ارز ازاد")):
+            continue
+        if any(bad in first for bad in ("مبادله", "دولتی", "نیما", "حواله", "سنا", "مرکز")):
+            continue
+        time_idx = find_header_col(header_cells, ["زمان", "ساعت", "تاریخ", "تایم", "بروزرسانی"])
+        if time_idx == -1:
+            continue
+        for row in table.find_all("tr"):
+            cols = row.find_all(["td", "th"])
+            if len(cols) > time_idx and clean_title(get_cell_text(cols[0])) == "دلار":
+                return get_cell_text(cols[time_idx])
+    return None
+
+def _wait_until_usd_fresh(page) -> None:
+    """
+    تا وقتی زمان ردیف «دلار» (ارز آزاد) به کمتر از FRESH_TARGET_MINUTES از «اکنون» نرسیده صبر می‌کند.
+    خروج زودهنگام: تازه شد | زمان ردیف ساعت ندارد (مثلاً «۱۱ مهر») | زمان ردیف FRESH_STABLE_SECONDS تغییر نکرد | سقف زمانی.
+    """
+    tz = pytz.timezone('Asia/Tehran')
+    start = time.monotonic()
+    last_text, last_change = None, start
+    while True:
+        try:
+            raw = _extract_free_usd_row_time(page.content())
+        except Exception:
+            return
+        now_m = time.monotonic()
+        if raw is not None:
+            if raw != last_text:
+                last_text, last_change = raw, now_m
+            if not has_time_info(raw):
+                return
+            diff = parse_row_time_diff_minutes(raw, datetime.now(tz))
+            if diff is None or diff <= FRESH_TARGET_MINUTES:
+                if now_m - start > 0.5:
+                    print(f"✅ ردیف دلار پس از {now_m - start:.1f} ثانیه تازه شد (زمان ردیف: {raw}).", flush=True)
+                return
+            if now_m - last_change >= FRESH_STABLE_SECONDS:
+                print(f"ℹ️ زمان ردیف دلار ({raw}) {FRESH_STABLE_SECONDS:.0f} ثانیه تغییر نکرد؛ ادامه بدون انتظار بیشتر.", flush=True)
+                return
+        if now_m - start >= FRESH_MAX_SECONDS:
+            print(f"⚠️ تا سقف {FRESH_MAX_SECONDS:.0f} ثانیه ردیف دلار تازه نشد (زمان ردیف: {raw}).", flush=True)
+            return
+        page.wait_for_timeout(int(FRESH_POLL_SECONDS * 1000))
+
+def fetch_rendered_html(url: str, extra_wait: float = 3.0, wait_for_fresh: bool = False) -> str | None:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -258,6 +320,8 @@ def fetch_rendered_html(url: str, extra_wait: float = 3.0) -> str | None:
                 pass
 
             page.wait_for_timeout(int(extra_wait * 1000))
+            if wait_for_fresh:
+                _wait_until_usd_fresh(page)
             html = page.content()
             browser.close()
             return html
@@ -494,6 +558,7 @@ def scrape_homepage_data():
     #  ۱) یکی از نمادهای حیاتی کهنه باشد
     #  ۲) درصد بالایی از کل ردیف‌ها کهنه باشد (نشانهٔ بارگذاری ناقص JS سایت)
     CRITICAL_KEYS = {"usd", "eur", "gold_18k", "coin_emami", "silver_gram", "btc"}
+    CRITICAL_MAX_DIFF_MINUTES = 20.0  # آستانهٔ سخت‌گیرانه‌تر فقط برای نمادهای حیاتی (کش قدیمی ۴۰ تا ۴۵ دقیقه‌ای را هم می‌گیرد)
     SYSTEMIC_STALE_RATIO = 0.30
     MIN_ROWS_FOR_RATIO_CHECK = 10  # برای نمونهٔ خیلی کوچک، درصد معنی‌دار نیست
 
@@ -532,7 +597,7 @@ def scrape_homepage_data():
         unrecognized_titles = set()
 
         try:
-            html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0 * attempt)
+            html = fetch_rendered_html("https://www.tgju.org", extra_wait=3.0 * attempt, wait_for_fresh=True)
             # زمان مرجع «بعد از» رندر گرفته می‌شود، نه قبل از آن (رندر ~۱۵-۲۰ ثانیه طول می‌کشد)
             tehran_now = datetime.now(tehran_tz)
             updated_at = tehran_now.strftime("%Y-%m-%d %H:%M:%S")
@@ -707,7 +772,10 @@ def scrape_homepage_data():
         # ---------- اعتبارسنجی فاصله زمانی ----------
         timed = [i for i in scraped_data if i.get("_time_diff_min") is not None]
         stale_items = [i for i in timed if i["_time_diff_min"] > MAX_ACCEPTABLE_TIME_DIFF_MINUTES]
-        critical_stale = [i for i in stale_items if i["symbol_key"] in CRITICAL_KEYS]
+        critical_stale = [
+            i for i in timed
+            if i["symbol_key"] in CRITICAL_KEYS and i["_time_diff_min"] > CRITICAL_MAX_DIFF_MINUTES
+        ]
         stale_ratio = (len(stale_items) / len(timed)) if timed else 0.0
 
         def _names(items):
@@ -736,8 +804,9 @@ def scrape_homepage_data():
                 else f"{len(stale_items)} از {len(timed)} ردیف ({stale_ratio:.0%}) کهنه" if scraped_data
                 else "هیچ داده‌ای استخراج نشد"
             )
+            limit_shown = CRITICAL_MAX_DIFF_MINUTES if critical_stale else MAX_ACCEPTABLE_TIME_DIFF_MINUTES
             print(
-                f"⚠ فاصله زمانی نامتعارف با تایم تهران (>{MAX_ACCEPTABLE_TIME_DIFF_MINUTES:.0f} دقیقه) - {reason}. "
+                f"⚠ فاصله زمانی نامتعارف با تایم تهران (>{limit_shown:.0f} دقیقه) - {reason}. "
                 f"{RETRY_WAIT_SECONDS:.0f} ثانیه صبر و تلاش مجدد...",
                 flush=True,
             )
@@ -992,12 +1061,23 @@ def update_database(data_list):
     accepted = []
     rejected_anomalies = []
     held_back = []
+    invalid_prices = []
     _tz = pytz.timezone('Asia/Tehran')
 
     for item in data_list:
         old = existing_rows.get(item["symbol_key"])
         old_val = _to_float(old["price"]) if old else None
         new_val = _to_float(item["price"])
+
+        # قیمت نامعتبر ("-"، خالی، غیرعددی یا صفر/منفی) هرگز جایگزین مقدار قبلی نمی‌شود
+        if new_val is None or new_val <= 0:
+            invalid_prices.append({
+                "symbol_key": item["symbol_key"],
+                "title_fa": item["title_fa"],
+                "old_price": old["price"] if old else "-",
+                "new_price": item["price"],
+            })
+            continue
 
         if old_val is not None and new_val is not None and old_val != 0:
             old_digits, new_digits = _digit_count(old_val), _digit_count(new_val)
@@ -1094,6 +1174,11 @@ def update_database(data_list):
                 pass
     else:
         print("ℹ️ دیتابیس در دسترس نبود اما data.json با موفقیت به‌روزرسانی شد.", flush=True)
+
+    if invalid_prices:
+        print(f"\n🚫 {len(invalid_prices)} نماد به‌دلیل قیمت نامعتبر ثبت نشد (مقدار قبلی حفظ شد):", flush=True)
+        for v in invalid_prices:
+            print(f"   - {v['symbol_key']} ({v['title_fa']}): قبلی {v['old_price']} <- دیده‌شده (نامعتبر) {v['new_price']!r}", flush=True)
 
     if held_back:
         print(f"\n⏸️ {len(held_back)} نماد حیاتی به‌دلیل «مقدار جدید بدون ساعت» نگه داشته شد (مقدار قبلی ساعت‌دار حفظ شد):", flush=True)
