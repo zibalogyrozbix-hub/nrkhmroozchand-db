@@ -135,12 +135,6 @@ SYMBOL_MAP = {
     "زغال سنگ": ["coal"],
 
     # شاخص‌های بورس و جهانی
-    "بازار اول فرابورس": ["ifb_market1"],
-    "بازار دوم فرابورس": ["ifb_market2"],
-    "شاخص بازار اول": ["bourse_market1"],
-    "شاخص بازار دوم": ["bourse_market2"],
-    "شاخص قیمت هم‌وزن": ["bourse_pequal"],
-    "شاخص قیمت وزنی ارزشی": ["bourse_pweighted"],
     "داوجونز": ["dow_jones"],
     "نزدک": ["nasdaq"],
     "اس‌ام‌آی سوئیس": ["smi_swiss"],
@@ -156,7 +150,8 @@ SYMBOL_MAP = {
 }
 
 COMMODITIES = {"cotton", "sugar", "soybeans", "wheat", "corn", "rice", "aluminum", "nickel", "lead", "zinc", "copper", "tin", "oil_crude", "oil_brent", "oil_opec", "gasoline", "natural_gas", "coal"}
-INDICES = {"bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"}
+BOURSE_KEYS = ("bourse_total", "bourse_market1", "bourse_market2", "bourse_equal_total", "bourse_pequal", "bourse_pweighted", "ifb_total", "ifb_market1", "ifb_market2")
+INDICES = {"bourse_total", "bourse_equal_total", "ifb_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2", "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss", "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"}
 CRYPTO = {"btc", "eth", "usdt", "trx", "ada", "sol", "doge", "shib", "ton", "xrp", "ltc", "bch", "dot", "avax", "xlm", "dash", "bnb"}
 
 # نمادهایی که قیمت آن‌ها از ریال به تومان (تقسیم بر ۱۰) تبدیل می‌شود
@@ -189,7 +184,7 @@ USD_UNIT_SYMBOLS = {
 }
 
 UNIT_INDEX_SYMBOLS = {
-    "bourse_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2",
+    "bourse_total", "bourse_equal_total", "ifb_total", "ifb_market1", "ifb_market2", "bourse_market1", "bourse_market2",
     "bourse_pequal", "bourse_pweighted", "dow_jones", "nasdaq", "smi_swiss",
     "nifty_50", "ftse_100", "dax", "cac_40", "nikkei_225", "shanghai_composite", "ibex_35"
 }
@@ -306,7 +301,7 @@ def _wait_until_usd_fresh(page) -> None:
             return
         page.wait_for_timeout(int(FRESH_POLL_SECONDS * 1000))
 
-def fetch_rendered_html(url: str, extra_wait: float = 3.0, wait_for_fresh: bool = False) -> str | None:
+def fetch_rendered_html(url: str, extra_wait: float = 3.0, wait_for_fresh: bool = False, wait_for_selector: str | None = None) -> str | None:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -318,6 +313,12 @@ def fetch_rendered_html(url: str, extra_wait: float = 3.0, wait_for_fresh: bool 
                 loading_el.wait_for(state="detached", timeout=8000)
             except Exception:
                 pass
+
+            if wait_for_selector:
+                try:
+                    page.wait_for_selector(wait_for_selector, timeout=15000)
+                except Exception:
+                    pass
 
             page.wait_for_timeout(int(extra_wait * 1000))
             if wait_for_fresh:
@@ -884,89 +885,190 @@ def scrape_homepage_data():
     return list(unique_data.values())
 
 
-def find_value_for_label(soup, labels):
-    """
-    جست‌وجوی مقدار مقابل یک برچسب (مثلا «نرخ فعلی») در جدول‌های اطلاعات
-    یک صفحه اختصاصی (profile) تک‌دارایی.
-    """
-    for row in soup.find_all("tr"):
-        cells = row.find_all(["th", "td"])
-        if len(cells) < 2:
-            continue
-        for i, c in enumerate(cells):
-            c_txt = clean_title(get_cell_text(c))
-            if any(lbl in c_txt for lbl in labels):
-                if i + 1 < len(cells):
-                    return get_cell_text(cells[i + 1])
-                elif i - 1 >= 0:
-                    return get_cell_text(cells[i - 1])
-    for item in soup.select("li, div"):
-        spans = item.find_all(["span", "div", "td"], recursive=False)
-        if len(spans) >= 2:
-            label_txt = clean_title(get_cell_text(spans[0]))
-            if any(lbl in label_txt for lbl in labels):
-                return get_cell_text(spans[1])
-    return None
+_SHAKHESBAN_URL = "https://www.shakhesban.com/markets/index"
 
+def _sb_norm(text: str) -> str:
+    t = clean_title(text or "")
+    t = re.sub(r'[\s()\[\]\-–—_/\\،,.:]+', '', t)
+    return t
 
-def fetch_bourse_total_index():
-    tehran_tz = pytz.timezone('Asia/Tehran')
-    updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-    price_labels = ["نرخ فعلی", "نرخ لحظه ای", "قیمت لحظه ای"]
-    amount_labels = ["میزان تغییر نسبت به روز گذشته", "میزان تغییر"]
-    percent_labels = ["درصد تغییر نسبت به روز گذشته", "درصد تغییر"]
-
-    try:
-        html = fetch_rendered_html("https://www.tgju.org/profile/gc30", extra_wait=2.0)
-        if not html:
-            return None
-        soup = BeautifulSoup(html, "html.parser")
-
-        raw_price = find_value_for_label(soup, price_labels)
-        raw_amount = find_value_for_label(soup, amount_labels)
-        raw_percent = find_value_for_label(soup, percent_labels)
-
-        if raw_price is None:
-            print("هشدار: مقدار «نرخ فعلی» برای شاخص کل (gc30) پیدا نشد.", flush=True)
-            return None
-
-        price_str, price_num = parse_price_value(raw_price, is_index=True)
-
-        change_amt = "0"
-        if raw_amount is not None:
-            amt_clean = to_english_digits(raw_amount)
-            amt_match = re.search(r'(-?\d+(?:\.\d+)?)', amt_clean)
-            if amt_match:
-                is_neg = "-" in amt_clean or "کاهش" in raw_amount
-                amt_val = abs(float(amt_match.group(1)))
-                if is_neg:
-                    amt_val = -amt_val
-                change_amt = format_number_with_comma(amt_val)
-
-        change_pct = "0%"
-        if raw_percent is not None:
-            pct_clean = to_english_digits(raw_percent)
-            pct_match = re.search(r'(-?\d+(?:\.\d+)?)', pct_clean)
-            if pct_match:
-                is_neg = "-" in pct_clean or "کاهش" in raw_percent
-                pct_val = abs(float(pct_match.group(1)))
-                if is_neg:
-                    pct_val = -pct_val
-                change_pct = f"{pct_val:.2f}%"
-
-        return {
-            "symbol_key": "bourse_total",
-            "title_fa": "شاخص کل",
-            "price": price_str,
-            "unit": get_unit("bourse_total"),
-            "change_amount": change_amt,
-            "change_percent": change_pct,
-            "updated_at": updated_at
-        }
-    except Exception as e:
-        print(f"خطا در استخراج شاخص کل بورس از gc30: {e}", flush=True)
+def _sb_key_for(name: str, market_type: str = "") -> str | None:
+    n = _sb_norm(name)
+    mt = _sb_norm(market_type)
+    if not n.startswith("شاخص"):
         return None
+    is_ifb = "فرابورس" in n or "فرابورس" in mt
+    n = n.replace("فرابورس", "").replace("بورس", "")
+    if n == "شاخصکل":
+        return "ifb_total" if is_ifb else "bourse_total"
+    if is_ifb:
+        return {"شاخصبازاراول": "ifb_market1", "شاخصبازاردوم": "ifb_market2"}.get(n)
+    return {
+        "شاخصکلهموزن": "bourse_equal_total",
+        "شاخصبازاراول": "bourse_market1",
+        "شاخصبازاردوم": "bourse_market2",
+        "شاخصقیمتهموزن": "bourse_pequal",
+        "شاخصقیمتوزنیارزشی": "bourse_pweighted",
+    }.get(n)
+
+_SB_TITLES = {
+    "bourse_total": "شاخص کل بورس",
+    "bourse_market1": "شاخص بازار اول",
+    "bourse_market2": "شاخص بازار دوم",
+    "bourse_equal_total": "شاخص کل (هم وزن)",
+    "bourse_pequal": "شاخص قیمت (هم وزن)",
+    "bourse_pweighted": "شاخص قیمت (وزنی - ارزشی)",
+    "ifb_total": "شاخص کل فرابورس",
+    "ifb_market1": "شاخص بازار اول فرابورس",
+    "ifb_market2": "شاخص بازار دوم فرابورس",
+}
+
+def _sb_number(text: str):
+    """(عدد مطلق یا None, آیا علامت منفی صریح دارد)"""
+    if not text:
+        return None, False
+    t = to_english_digits(text).replace('٬', '').replace('٫', '.').replace('٪', '').replace('%', '')
+    t = t.replace('‎', '').replace('‏', '').replace('‪', '').replace('‬', '')
+    m = re.search(r'([+\-])?\s*(\d+(?:\.\d+)?)', t)
+    if not m:
+        return None, False
+    neg = (m.group(1) == '-') or bool(re.search(r'(\d\s*-)|(\(\s*\d)', t)) or "🔻" in text
+    return float(m.group(2)), neg
+
+def _sb_header_grid(rows):
+    grid = []
+    spans = {}
+    for r_i, tr in enumerate(rows):
+        line = []
+        col = 0
+        cells = tr.find_all(["th", "td"])
+        ci = 0
+        while ci < len(cells) or col in spans:
+            if col in spans and spans[col][0] > 0:
+                line.append(spans[col][1])
+                spans[col] = (spans[col][0] - 1, spans[col][1])
+                if spans[col][0] == 0:
+                    del spans[col]
+                col += 1
+                continue
+            if ci >= len(cells):
+                break
+            c = cells[ci]; ci += 1
+            txt = clean_title(get_cell_text(c))
+            try:
+                cs = max(1, int(c.get("colspan", 1)))
+                rs = max(1, int(c.get("rowspan", 1)))
+            except Exception:
+                cs, rs = 1, 1
+            for _ in range(cs):
+                line.append(txt)
+                if rs > 1:
+                    spans[col] = (rs - 1, txt)
+                col += 1
+        grid.append(line)
+    return grid
+
+def parse_shakhesban_indices(html: str, updated_at: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    results = {}
+    for table in soup.find_all("table"):
+        trs = table.find_all("tr")
+        head_rows = [tr for tr in trs if tr.find("th") and not tr.find("td")]
+        data_rows = [tr for tr in trs if tr.find("td")]
+        if not data_rows:
+            continue
+        idx = {}
+        if head_rows:
+            grid = _sb_header_grid(head_rows)
+            ncols = max((len(l) for l in grid), default=0)
+            labels = []
+            for c in range(ncols):
+                parts = [l[c] for l in grid if c < len(l)]
+                labels.append(" | ".join(parts))
+            def pick(pred):
+                cands = [i for i, lb in enumerate(labels) if pred(lb)]
+                pref = [i for i in cands if "آخرین" in labels[i]]
+                return (pref or cands or [None])[0]
+            idx["name"] = pick(lambda lb: lb.strip().endswith("نام") or lb == "نام")
+            idx["mtype"] = pick(lambda lb: "نوع بازار" in lb)
+            idx["value"] = pick(lambda lb: "مقدار" in lb)
+            idx["change"] = pick(lambda lb: "تغییر" in lb and "درصد" not in lb)
+            idx["pct"] = pick(lambda lb: "درصد" in lb)
+            idx["date"] = pick(lambda lb: "تاریخ" in lb)
+        for tr in data_rows:
+            cells = tr.find_all(["td", "th"])
+            texts = [get_cell_text(c) for c in cells]
+            name_i = idx.get("name") if idx.get("name") is not None and idx["name"] < len(cells) else 0
+            name = texts[name_i] if texts else ""
+            mt = texts[idx["mtype"]] if idx.get("mtype") is not None and idx["mtype"] < len(cells) else ""
+            key = _sb_key_for(name, mt)
+            if not key or key in results:
+                continue
+            def cell(k):
+                i = idx.get(k)
+                return (i, cells[i]) if i is not None and i < len(cells) else (None, None)
+            vi, vc = cell("value"); ci_, cc = cell("change"); pi, pc = cell("pct"); di, dc = cell("date")
+            if vc is None or cc is None or pc is None:
+                # فالبک: سه سلول عددی اول بعد از نام
+                nums = [(i, c) for i, c in enumerate(cells) if i != name_i and _sb_number(texts[i])[0] is not None and not re.search(r'\d{4}/\d{1,2}/\d{1,2}', to_english_digits(texts[i]))]
+                if len(nums) < 3:
+                    print(f"⚠️ شاخص‌بان: ساختار ردیف «{name}» قابل تشخیص نبود.", flush=True)
+                    continue
+                (vi, vc), (ci_, cc), (pi, pc) = nums[0], nums[1], nums[2]
+            value, _ = _sb_number(get_cell_text(vc))
+            chg, chg_neg = _sb_number(get_cell_text(cc))
+            pct, pct_neg = _sb_number(get_cell_text(pc))
+            if value is None or value <= 0:
+                print(f"⚠️ شاخص‌بان: مقدار «{name}» نامعتبر است ({get_cell_text(vc)!r}).", flush=True)
+                continue
+            neg = chg_neg or pct_neg or (chg is not None and chg != 0 and is_cell_red(cc))
+            if chg is None and pct is not None:
+                chg = abs(value - value / (1 + (-pct if neg else pct) / 100.0))
+            if chg is not None:
+                signed = -abs(chg) if neg else abs(chg)
+                prev = value - signed
+                calc_pct = (signed / prev * 100.0) if prev else 0.0
+                if pct is None:
+                    pct_signed = calc_pct
+                else:
+                    pct_signed = -abs(pct) if neg else abs(pct)
+                    if abs(pct_signed - calc_pct) > 0.05:
+                        print(f"ℹ️ شاخص‌بان: درصد {name}: سایت {pct_signed:.2f} ≠ محاسبه‌شده {calc_pct:.2f}", flush=True)
+            else:
+                signed, pct_signed = 0.0, 0.0
+            date_txt = get_cell_text(dc).strip() if dc is not None else ""
+            chg_str = "0" if signed == 0 else format_number_with_comma(round(signed, 2))
+            pct_str = "0%" if round(pct_signed, 2) == 0 else f"{pct_signed:.2f}%"
+            results[key] = {
+                "symbol_key": key,
+                "title_fa": _SB_TITLES[key],
+                "price": format_number_with_comma(value),
+                "unit": get_unit(key),
+                "change_amount": chg_str,
+                "change_percent": pct_str,
+                "updated_at": updated_at,
+                "row_time": date_txt,
+            }
+    return [results[k] for k in BOURSE_KEYS if k in results]
+
+
+def fetch_shakhesban_indices() -> list:
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    for attempt in range(1, 4):
+        try:
+            updated_at = datetime.now(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
+            html = fetch_rendered_html(_SHAKHESBAN_URL, extra_wait=2.0 * attempt, wait_for_selector="table tbody tr")
+            if html:
+                items = parse_shakhesban_indices(html, updated_at)
+                if items:
+                    missing = [k for k in BOURSE_KEYS if k not in {i["symbol_key"] for i in items}]
+                    if missing:
+                        print(f"⚠️ شاخص‌بان: شاخص‌های پیدا‌نشده (مقدار قبلی حفظ می‌شود): {', '.join(missing)}", flush=True)
+                    return items
+            print(f"⚠️ شاخص‌بان: تلاش {attempt} بدون نتیجه.", flush=True)
+        except Exception as e:
+            print(f"❌ خطا در شاخص‌بان (تلاش {attempt}): {e}", flush=True)
+    return []
 
 def get_db_connection():
     turso_url = os.environ.get("TURSO_DATABASE_URL", "").strip()
@@ -1011,6 +1113,7 @@ def write_data_json(accepted):
 
 def update_database(data_list):
     existing_rows = {}
+    obsolete_keys = []
     conn = None
     db_committed = False
 
@@ -1055,8 +1158,20 @@ def update_database(data_list):
                 "updated_at": row[6],
                 "row_time": row[7],
             }
+
+        obsolete_keys = sorted(k for k in existing_rows if k.startswith(("bourse_", "ifb_")) and k not in BOURSE_KEYS)
     except Exception as e:
         print(f"⚠️ هشدار: عدم امکان برقراری ارتباط با دیتابیس جهت خواندن مقادیر قبلی ({e}) — پردازش ادامه می‌یابد.", flush=True)
+
+    # حذف شاخص‌های بورسی ایران که دیگر در منبع جدید (شاخص‌بان) نیستند
+    if obsolete_keys:
+        print(f"\n🗑️ حذف شاخص‌های بورسی منسوخ از دیتابیس و JSON: {', '.join(obsolete_keys)}", flush=True)
+        for k in obsolete_keys:
+            existing_rows.pop(k, None)
+            try:
+                cursor.execute("DELETE FROM market_prices WHERE symbol_key = ?", (k,))
+            except Exception as e:
+                print(f"⚠️ حذف {k} از دیتابیس ناموفق بود: {e}", flush=True)
 
     accepted = []
     rejected_anomalies = []
@@ -1196,7 +1311,7 @@ def update_database(data_list):
                 flush=True,
             )
 
-    expected_roster = {sk for keys in SYMBOL_MAP.values() for sk in keys} | {"bourse_total"}
+    expected_roster = {sk for keys in SYMBOL_MAP.values() for sk in keys} | set(BOURSE_KEYS)
     matched_roster = {item["symbol_key"] for item in accepted}
     missing_this_run = sorted(expected_roster - matched_roster)
     if missing_this_run:
@@ -1383,9 +1498,7 @@ if __name__ == "__main__":
     try:
         data = scrape_homepage_data()
 
-        bourse_total_item = fetch_bourse_total_index()
-        if bourse_total_item:
-            data.append(bourse_total_item)
+        data.extend(fetch_shakhesban_indices())
 
         if data:
             update_result = update_database(data)
