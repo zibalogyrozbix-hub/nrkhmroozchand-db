@@ -453,6 +453,13 @@ def parse_changes(change_cell, price_val: float) -> tuple[str, str, float]:
 
     return amt_str, pct_str, signed_amt
 
+def format_signed_amount(signed_val: float) -> str:
+    """فرمت مقدار تغییر علامت‌دار هم‌سبک parse_changes: «0»، «1,234» یا «-1,234»."""
+    if not signed_val:
+        return "0"
+    text = format_number_with_comma(abs(signed_val))
+    return f"-{text}" if signed_val < 0 else text
+
 def find_header_col(header_cells, target_patterns) -> int:
     for idx, c in enumerate(header_cells):
         h_norm = get_cell_text(c).replace(" ", "").replace("\u200c", "")
@@ -749,6 +756,14 @@ def scrape_homepage_data():
                             if primary_key in TOMAN_SYMBOLS and price_num:
                                 price_num = price_num / 10
                                 price_str = format_number_with_comma(price_num)
+
+                                # مقدار تغییر (change_amount) هم در همان جدول به ریال است و باید با قیمت
+                                # هم‌واحد شود (درصد تغییر بدون واحد است و دست نمی‌خورد).
+                                # رمزارزها مستثنی‌اند: تغییرشان بعداً از change_num خام × نرخ تومانی دلار
+                                # ساخته می‌شود (پایین‌تر در همین تابع) و تقسیم بر ۱۰ آن را خراب می‌کند.
+                                if primary_key not in CRYPTO:
+                                    change_num = change_num / 10
+                                    change_amt = format_signed_amount(change_num)
 
                             display_title = "نفت اوپک" if primary_key == "oil_opec" else matched_fa
 
