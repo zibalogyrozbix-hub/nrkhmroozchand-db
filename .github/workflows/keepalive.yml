@@ -1,0 +1,30 @@
+
+name: Keep Repository Active
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 */20 * *"
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update heartbeat file
+        run: |
+          date -u +"Last keepalive: %Y-%m-%d %H:%M:%S UTC" > heartbeat.txt
+
+      - name: Commit heartbeat
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add heartbeat.txt
+          git commit -m "chore: update repository heartbeat" || exit 0
+          git push
